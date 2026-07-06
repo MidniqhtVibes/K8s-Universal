@@ -1,0 +1,139 @@
+---
+- name: Configure HAProxy and Keepalived
+  hosts: loadbalancer
+  become: true
+
+  tasks:
+    - name: Install HAProxy and Keepalived
+      ansible.builtin.apt:
+        name:
+          - haproxy
+          - keepalived
+        state: present
+        update_cache: true
+
+    - name: Configure HAProxy
+      ansible.builtin.copy:
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          global
+              log /dev/log local0
+              log /dev/log local1 notice
+              daemon
+              maxconn 2048
+
+          defaults
+              log     global
+              mode    tcp
+              option  tcplog
+              option  dontlognull
+              timeout connect 5s
+              timeout client  50s
+              timeout server  50s
+
+          frontend kubernetes_api
+              bind *:6443
+              mode tcp
+              default_backend kubernetes_control_plane
+
+          backend kubernetes_control_plane
+              mode tcp
+              balance roundrobin
+              option tcp-check
+          {% for backend in haproxy_backends %}
+              server {{ backend.name }} {{ backend.ip }}:6443 check
+          {% endfor %}
+
+          frontend http_ingress
+              bind *:80
+              mode tcp
+              default_backend traefik_http
+
+          backend traefik_http
+              mode tcp
+              balance roundrobin
+              option tcp-check
+              server worker-01 10.200.50.161:30080 check
+              server worker-02 10.200.50.162:30080 check
+
+          frontend https_ingress
+              bind *:443
+              mode tcp
+              default_backend traefik_https
+
+          backend traefik_https
+              mode tcp
+              balance roundrobin
+              option tcp-check
+              server worker-01 10.200.50.161:30443 check
+              server worker-02 10.200.50.162:30443 check
+      notify: Restart HAProxy
+
+    - name: Set keepalived state
+      ansible.builtin.set_fact:
+        keepalived_state: "{{ 'MASTER' if inventory_hostname == 'lb-01' else 'BACKUP' }}"
+
+    - name: Set keepalived priority
+      ansible.builtin.set_fact:
+        keepalived_priority: "{{ 110 if inventory_hostname == 'lb-01' else 100 }}"
+
+    - name: Configure Keepalived
+      ansible.builtin.copy:
+        dest: /etc/keepalived/keepalived.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          vrrp_script chk_haproxy {
+              script "pidof haproxy"
+              interval 2
+              weight 2
+          }
+
+          vrrp_instance VI_1 {
+              state {{ keepalived_state }}
+              interface {{ keepalived_interface | default('eth0') }}
+              virtual_router_id 51
+              priority {{ keepalived_priority }}
+              advert_int 1
+
+              authentication {
+                  auth_type PASS
+                  auth_pass k8ssec01
+              }
+
+              virtual_ipaddress {
+                  {{ api_vip }}/24
+              }
+
+              track_script {
+                  chk_haproxy
+              }
+          }
+      notify: Restart Keepalived
+
+    - name: Enable and start HAProxy
+      ansible.builtin.service:
+        name: haproxy
+        enabled: true
+        state: started
+
+    - name: Enable and start Keepalived
+      ansible.builtin.service:
+        name: keepalived
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Restart HAProxy
+      ansible.builtin.service:
+        name: haproxy
+        state: restarted
+
+    - name: Restart Keepalived
+      ansible.builtin.service:
+        name: keepalived
+        state: restarted

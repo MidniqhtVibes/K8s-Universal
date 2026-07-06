@@ -1,0 +1,49 @@
+---
+- name: Install Calico CNI
+  hosts: control-01
+  become: true
+  tasks:
+    - name: Check if Calico namespace exists
+      ansible.builtin.shell: kubectl --kubeconfig /etc/kubernetes/admin.conf get ns tigera-operator
+      register: calico_ns
+      failed_when: false
+      changed_when: false
+
+    - name: Install Calico CRDs
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/v1_crd_projectcalico_org.yaml
+      when: calico_ns.rc != 0
+
+    - name: Install Tigera operator
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/tigera-operator.yaml
+      when: calico_ns.rc != 0
+
+    - name: Create Calico custom resources
+      ansible.builtin.copy:
+        dest: /root/calico-custom-resources.yaml
+        content: |
+          apiVersion: operator.tigera.io/v1
+          kind: Installation
+          metadata:
+            name: default
+          spec:
+            calicoNetwork:
+              ipPools:
+              - blockSize: 26
+                cidr: {{ pod_cidr }}
+                encapsulation: VXLANCrossSubnet
+                natOutgoing: Enabled
+                nodeSelector: all()
+          ---
+          apiVersion: operator.tigera.io/v1
+          kind: APIServer
+          metadata:
+            name: default
+          spec: {}
+
+    - name: Apply Calico custom resources
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f /root/calico-custom-resources.yaml
+      when: calico_ns.rc != 0
+
+    - name: Restart CoreDNS after HA join
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system rollout restart deployment coredns
+      changed_when: true

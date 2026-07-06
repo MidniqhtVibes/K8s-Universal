@@ -1,0 +1,41 @@
+cluster:
+  name: k8s-ha-lab
+  kubernetes_minor: "v1.36"
+  pod_cidr: "192.168.0.0/16"
+  service_cidr: "10.96.0.0/12"
+  cni: calico
+
+proxmox:
+  host: 10.200.50.134
+
+network:
+  subnet_cidr: 24
+  gateway: 10.200.50.1
+  dns:
+    - 10.200.50.1
+    - 1.1.1.1
+
+api:
+  vip: 10.200.50.150
+  port: 6443
+
+nodes:
+  loadbalancer:
+    - name: lb-01
+      ip: 10.200.50.145
+    - name: lb-02
+      ip: 10.200.50.146
+
+  control_plane:
+    - name: control-01
+      ip: 10.200.50.151
+    - name: control-02
+      ip: 10.200.50.152
+    - name: control-03
+      ip: 10.200.50.153
+
+  worker:
+    - name: worker-01
+      ip: 10.200.50.161
+    - name: worker-02
+      ip: 10.200.50.162

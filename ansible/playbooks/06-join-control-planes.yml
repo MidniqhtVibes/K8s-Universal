@@ -1,0 +1,13 @@
+---
+- name: Join additional control plane nodes
+  hosts: control_plane:!control-01
+  become: true
+  tasks:
+    - name: Check if node already joined
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Join control plane
+      ansible.builtin.command: "{{ hostvars[first_control_plane].control_plane_join_command }}"
+      when: not kubelet_conf.stat.exists

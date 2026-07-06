@@ -1,0 +1,11 @@
+---
+- import_playbook: playbooks/00-check.yml
+- import_playbook: playbooks/01-bootstrap-os.yml
+- import_playbook: playbooks/02-loadbalancer.yml
+- import_playbook: playbooks/03-containerd.yml
+- import_playbook: playbooks/04-kubernetes-packages.yml
+- import_playbook: playbooks/05-init-control-plane.yml
+- import_playbook: playbooks/06-join-control-planes.yml
+- import_playbook: playbooks/07-join-workers.yml
+- import_playbook: playbooks/08-install-cni.yml
+- import_playbook: playbooks/09-fetch-kubeconfig.yml

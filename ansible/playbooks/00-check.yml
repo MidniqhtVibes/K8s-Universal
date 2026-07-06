@@ -1,0 +1,11 @@
+---
+- name: Check all hosts
+  hosts: all
+  become: true
+  tasks:
+    - name: Ping hosts
+      ansible.builtin.ping:
+
+    - name: Show hostname
+      ansible.builtin.command: hostname
+      changed_when: false
