@@ -109,7 +109,7 @@
           - --timeout=600s
       changed_when: false
 
-    - name: Wait for CoreDNS rollout
+    - name: Restart CoreDNS after CNI installation
       ansible.builtin.command:
         argv:
           - kubectl
@@ -118,7 +118,84 @@
           - -n
           - kube-system
           - rollout
-          - status
+          - restart
           - deployment/coredns
-          - --timeout=300s
-      changed_when: false
+      changed_when: true
+
+    - name: Verify CoreDNS rollout
+      block:
+        - name: Wait for CoreDNS rollout
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - --kubeconfig
+              - /etc/kubernetes/admin.conf
+              - -n
+              - kube-system
+              - rollout
+              - status
+              - deployment/coredns
+              - --timeout=300s
+          changed_when: false
+
+      rescue:
+        - name: Collect kube-system pod status
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - --kubeconfig
+              - /etc/kubernetes/admin.conf
+              - -n
+              - kube-system
+              - get
+              - pods
+              - -o
+              - wide
+          register: kube_system_pods
+          changed_when: false
+          failed_when: false
+
+        - name: Collect CoreDNS deployment details
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - --kubeconfig
+              - /etc/kubernetes/admin.conf
+              - -n
+              - kube-system
+              - describe
+              - deployment/coredns
+          register: coredns_details
+          changed_when: false
+          failed_when: false
+
+        - name: Collect recent kube-system events
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - --kubeconfig
+              - /etc/kubernetes/admin.conf
+              - -n
+              - kube-system
+              - get
+              - events
+              - --sort-by=.lastTimestamp
+          register: kube_system_events
+          changed_when: false
+          failed_when: false
+
+        - name: Show kube-system pod status
+          ansible.builtin.debug:
+            var: kube_system_pods.stdout_lines
+
+        - name: Show CoreDNS deployment details
+          ansible.builtin.debug:
+            var: coredns_details.stdout_lines
+
+        - name: Show recent kube-system events
+          ansible.builtin.debug:
+            var: kube_system_events.stdout_lines
+
+        - name: Stop because CoreDNS did not become ready
+          ansible.builtin.fail:
+            msg: CoreDNS wurde nach der CNI-Installation nicht bereit; Diagnose steht direkt oberhalb in diesem Joblog.
