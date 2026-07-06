@@ -38,6 +38,8 @@ cluster: preflight infra wait clean-ssh ping k8s check
 
 lab: cluster ingress
 
+demo: lab demo-ingress
+
 destroy:
 	cd terraform && terraform destroy
 
