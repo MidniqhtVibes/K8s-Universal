@@ -17,6 +17,7 @@ def test_generator_produces_secret_free_outputs(tmp_path):
     tfvars = json.loads((tmp_path / "cluster/generated/terraform.auto.tfvars.json").read_text())
     inventory = yaml.safe_load((tmp_path / "cluster/generated/ansible-inventory.yml").read_text())
     assert tfvars["nodes"]["worker-01"]["ip"] == "10.10.10.31"
+    assert tfvars["nodes"]["worker-01"]["vm_name"] == "test-cluster-worker-01"
     assert inventory["all"]["children"]["control_plane"]["hosts"]["control-01"]["ansible_host"] == "10.10.10.21"
     contents = "".join(path.read_text() for path in (tmp_path / "cluster").rglob("*") if path.is_file())
     assert "PRIVATE KEY" not in contents
@@ -26,4 +27,3 @@ def test_generator_produces_secret_free_outputs(tmp_path):
 def test_hash_is_deterministic():
     config = valid_config().public_dict()
     assert config_hash(config) == config_hash(dict(reversed(list(config.items()))))
-

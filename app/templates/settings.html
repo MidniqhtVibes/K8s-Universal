@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><h1>Einstellungen</h1><p class="muted">Standardwerte und reservierte Vergabepools fÃ¼r neue Cluster.</p></div></div>
+{% if request.query_params.get('saved') %}<div class="success">Einstellungen gespeichert.</div>{% endif %}
+{% if error %}<div class="error"><strong>UngÃ¼ltige Einstellung:</strong> {{ error }}</div>{% endif %}
+<form method="post" action="/settings" class="stack">
+  <section class="card"><h2>Automatisierung</h2><div class="form-grid">
+    <label class="check"><input type="checkbox" name="auto_suggest" {% if preferences.auto_suggest %}checked{% endif %}> Freie IPs und VM-IDs automatisch vorschlagen</label>
+    <label class="check"><input type="checkbox" name="vm_name_include_cluster" {% if preferences.vm_name_include_cluster %}checked{% endif %}> Clusternamen in Proxmox-VM-Namen aufnehmen</label>
+  </div></section>
+  <section class="card"><h2>Netzwerk-Standards</h2><div class="form-grid">
+    <label>VM-CIDR<input name="network_cidr" value="{{ preferences.network_cidr }}" required></label><label>Gateway<input name="gateway" value="{{ preferences.gateway }}" required></label>
+    <label>DNS, kommasepariert<input name="dns_servers" value="{{ preferences.dns_servers }}" required></label><label>Pod-CIDR<input name="pod_cidr" value="{{ preferences.pod_cidr }}" required></label>
+    <label>Service-CIDR<input name="service_cidr" value="{{ preferences.service_cidr }}" required></label><label class="wide">Reservierte IPs oder CIDRs<input name="reserved_ips" value="{{ preferences.reserved_ips }}" placeholder="10.200.50.2, 10.200.50.64/28"></label>
+  </div></section>
+  <section class="card"><h2>IP-Pools</h2><div class="form-grid compact">
+    {% for role, label in [('vip_pool','API-VIP'),('lb_ip','Load Balancer'),('cp_ip','Control Plane'),('worker_ip','Worker')] %}<label>{{ label }} von<input name="{{ role }}_start" value="{{ preferences[role + '_start'] }}" required></label><label>{{ label }} bis<input name="{{ role }}_end" value="{{ preferences[role + '_end'] }}" required></label>{% endfor %}
+  </div></section>
+  <section class="card"><h2>VM-ID-Pools und Standardanzahl</h2><div class="form-grid compact">
+    {% for role, label in [('lb','Load Balancer'),('cp','Control Plane'),('worker','Worker')] %}<label>{{ label }} IDs von<input type="number" name="{{ role }}_vm_id_start" value="{{ preferences[role + '_vm_id_start'] }}" required></label><label>{{ label }} IDs bis<input type="number" name="{{ role }}_vm_id_end" value="{{ preferences[role + '_vm_id_end'] }}" required></label><label>{{ label }} Anzahl<input type="number" name="{{ role }}_count" value="{{ preferences[role + '_count'] }}" required></label>{% endfor %}
+  </div></section>
+  <section class="card"><h2>Aktuell belegt</h2><p><strong>IPs:</strong> {{ used_ips|join(', ') if used_ips else 'keine' }}</p><p><strong>VM-IDs:</strong> {{ used_vm_ids|join(', ') if used_vm_ids else 'keine' }}</p></section>
+  <div class="actions"><button>Einstellungen speichern</button></div>
+</form>
+{% endblock %}

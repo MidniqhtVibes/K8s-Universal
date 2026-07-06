@@ -43,6 +43,19 @@ Destroy ist zweistufig. Zuerst wird nach Eingabe des Clusternamens ein Destroy-P
 
 Nach einem erfolgreichen Destroy erhält der Cluster den Status `destroyed`. Erst dann erscheint die zusätzliche Aktion **Cluster endgültig entfernen**. Sie löscht den Builder-Eintrag sowie dessen lokalen Terraform-State, Kubeconfig, generierte Dateien und Jobdaten. Credentials bleiben erhalten.
 
+### Automatische IP- und VM-ID-Vergabe
+
+Unter **Einstellungen** lassen sich das Standardnetz sowie getrennte IP- und
+VM-ID-Pools fÃ¼r Load Balancer, Control Planes und Worker festlegen. Neue Cluster
+erhalten daraus automatisch den ersten zusammenhÃ¤ngenden freien Bereich. Aktive
+Cluster, manuell reservierte IPs/CIDRs und bei ausgewÃ¤hltem Proxmox-Credential
+bereits vorhandene VM-IDs werden Ã¼bersprungen. Doppelte Vergaben zwischen vom
+Builder verwalteten Clustern werden zusÃ¤tzlich beim Speichern abgewiesen.
+
+Der Schalter **Clustername im Proxmox-VM-Namen** erzeugt Namen wie
+`produktion-control-01`. Bestehende Cluster behalten ohne aktivierten Schalter
+ihre bisherigen VM-Namen.
+
 ## kubectl-Terminal
 
 Nach erfolgreichem Apply ist das clustergebundene Terminal über die Sidebar oder die Clusteransicht erreichbar. Read-only-Befehle wie `get`, `describe` und `logs` funktionieren direkt. Mutierende Befehle benötigen den aktivierten Administrationsmodus und eine Einzelbestätigung. Allgemeine Shellbefehle, Verbindungsoptionen sowie interaktive TTY-Funktionen sind gesperrt.

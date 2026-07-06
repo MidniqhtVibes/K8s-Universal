@@ -60,6 +60,7 @@ variable "ssh_public_key" {
 variable "nodes" {
   type = map(object({
     name      = string
+    vm_name   = string
     role      = string
     vm_id     = number
     ip        = string

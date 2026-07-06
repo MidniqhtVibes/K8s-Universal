@@ -31,3 +31,26 @@ document.querySelector('#discover')?.addEventListener('click', async () => {
   }
 });
 sshCredential?.dispatchEvent(new Event('change'));
+
+const topologyCard = document.querySelector('[name="lb_count"]')?.closest('.card');
+if (topologyCard && !document.querySelector('#suggest-allocations')) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.id = 'suggest-allocations'; button.className = 'secondary';
+  button.textContent = 'Freie IPs und VM-IDs vorschlagen';
+  topologyCard.insertBefore(button, topologyCard.querySelector('h3'));
+}
+document.querySelector('#suggest-allocations')?.addEventListener('click', async () => {
+  const value = name => document.querySelector(`[name="${name}"]`)?.value;
+  const params = new URLSearchParams({lb_count: value('lb_count'), cp_count: value('cp_count'), worker_count: value('worker_count')});
+  const match = location.pathname.match(/^\/clusters\/([^/]+)\/edit$/);
+  if (match) params.set('exclude_cluster_id', match[1]);
+  const credentialId = proxmoxCredential?.selectedOptions[0]?.dataset.id;
+  if (credentialId) params.set('credential_id', credentialId);
+  const response = await fetch(`/api/allocations/suggest?${params}`);
+  const data = await response.json();
+  if (!response.ok) { window.alert(data.detail || 'Keine freie Vergabe gefunden.'); return; }
+  for (const field of ['api_vip', 'lb_ip_start', 'cp_ip_start', 'worker_ip_start', 'lb_vm_id_start', 'cp_vm_id_start', 'worker_vm_id_start']) {
+    const input = document.querySelector(`[name="${field}"]`);
+    if (input) input.value = data[field];
+  }
+});

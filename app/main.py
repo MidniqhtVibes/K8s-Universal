@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from .config import get_settings
+from .allocations import get_preferences, suggest_allocations, used_allocations, validate_preference_config
 from .db import Base, SessionLocal, engine, get_db
 from .manifests import create_revision, ensure_default_bundle, validate_manifest_content, validate_manifest_path
 from .models import AuditEvent, ApplicationBundle, Cluster, Credential, CredentialKind, Job, JobKind, JobStatus, ManifestFile, ManifestRevision, User, utcnow
@@ -162,12 +163,30 @@ def discover_proxmox(credential_id: str, _: User = Depends(current_user), db: Se
 
 @app.get("/clusters/new", response_class=HTMLResponse)
 def new_cluster(request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
-    return render_wizard(request, db)
+    preference = get_preferences(db).config
+    values = {
+        "network_cidr": preference["network_cidr"], "gateway": preference["gateway"],
+        "dns_servers": preference["dns_servers"], "pod_cidr": preference["pod_cidr"],
+        "service_cidr": preference["service_cidr"], "lb_count": str(preference["lb_count"]),
+        "cp_count": str(preference["cp_count"]), "worker_count": str(preference["worker_count"]),
+        "vm_name_include_cluster": "on" if preference["vm_name_include_cluster"] else "",
+    }
+    if preference.get("auto_suggest", True):
+        try:
+            values.update({key: str(value) for key, value in suggest_allocations(db).items()})
+        except ValueError as exc:
+            return render_wizard(request, db, str(exc), values, 400)
+    return render_wizard(request, db, values=values)
 
 
 def render_wizard(request: Request, db: Session, error: str | None = None, values: dict | None = None, status_code: int = 200):
     credentials = db.scalars(select(Credential).order_by(Credential.name)).all()
-    return templates.TemplateResponse(request, "wizard.html", {"credentials": credentials, "error": error, "values": values or {}, "action": request.url.path if request.url.path.endswith("/edit") else "/clusters"}, status_code=status_code)
+    used_ips, used_ids = used_allocations(db, request.path_params.get("cluster_id"))
+    return templates.TemplateResponse(request, "wizard.html", {
+        "credentials": credentials, "error": error, "values": values or {},
+        "used_ips": sorted(map(str, used_ips)), "used_vm_ids": sorted(used_ids),
+        "action": request.url.path if request.url.path.endswith("/edit") else "/clusters",
+    }, status_code=status_code)
 
 
 @app.post("/clusters")
@@ -196,6 +215,7 @@ def cluster_form_values(cluster: Cluster) -> dict[str, str]:
         "name": config["name"], "proxmox_credential": config["proxmox"]["credential_ref"], "proxmox_endpoint": config["proxmox"]["endpoint"],
         "proxmox_node": config["proxmox"]["node"], "datastore": config["proxmox"]["datastore"], "template_vm_id": str(config["proxmox"]["template_vm_id"]),
         "bridge": config["proxmox"]["bridge"], "vlan_id": str(config["proxmox"].get("vlan_id") or ""), "verify_tls": "on" if config["proxmox"]["verify_tls"] else "",
+        "vm_name_include_cluster": "on" if config["proxmox"].get("vm_name_include_cluster", False) else "",
         "network_cidr": config["network"]["cidr"], "gateway": config["network"]["gateway"], "dns_servers": ", ".join(config["network"]["dns_servers"]), "api_vip": config["network"]["api_vip"],
         "pod_cidr": config["kubernetes"]["pod_cidr"], "service_cidr": config["kubernetes"]["service_cidr"], "kubernetes_version": config["kubernetes"]["version"], "api_port": str(config["kubernetes"]["api_port"]),
         "ssh_credential": config["ssh"]["credential_ref"], "ssh_user": config["ssh"]["user"], "ssh_port": str(config["ssh"]["port"]), "ssh_public_key": config["ssh"]["public_key"],
@@ -208,6 +228,66 @@ def cluster_form_values(cluster: Cluster) -> dict[str, str]:
         first = nodes[0]
         values.update({f"{prefix}_count": str(len(nodes)), f"{prefix}_ip_start": first["ip"], f"{prefix}_vm_id_start": str(first["vm_id"]), f"{prefix}_cores": str(first["cores"]), f"{prefix}_memory": str(first["memory_mb"]), f"{prefix}_disk": str(first["disk_gb"])})
     return values
+
+
+@app.get("/api/allocations/suggest")
+def allocation_suggestion(
+    lb_count: int = 2, cp_count: int = 3, worker_count: int = 2,
+    exclude_cluster_id: str | None = None, credential_id: str | None = None,
+    _: User = Depends(current_user), db: Session = Depends(get_db),
+):
+    try:
+        if lb_count < 2 or cp_count not in (3, 5, 7) or worker_count < 1:
+            raise ValueError("UngÃ¼ltige Knotenzahl")
+        external_ids: set[int] = set()
+        if credential_id:
+            credential = db.get(Credential, credential_id)
+            if not credential or credential.kind != CredentialKind.PROXMOX:
+                raise ValueError("Proxmox-Credential nicht gefunden")
+            payload = credential_payload(db, f"credential://{credential.id}", CredentialKind.PROXMOX)
+            discovery = ProxmoxClient(credential.public_data["endpoint"], payload["api_token"], credential.public_data.get("verify_tls", True)).discover()
+            external_ids = {int(vm["vmid"]) for vm in discovery.get("vms", []) if vm.get("vmid") is not None}
+        return suggest_allocations(db, lb_count, cp_count, worker_count, exclude_cluster_id, external_ids)
+    except (ValueError, ProxmoxError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def preferences_page(request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    used_ips, used_ids = used_allocations(db)
+    return templates.TemplateResponse(request, "settings.html", {
+        "preferences": get_preferences(db).config,
+        "used_ips": sorted(map(str, used_ips)), "used_vm_ids": sorted(used_ids),
+    })
+
+
+@app.post("/settings")
+async def update_preferences(request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    form = await request.form()
+    integer_fields = {
+        "lb_vm_id_start", "lb_vm_id_end", "cp_vm_id_start", "cp_vm_id_end",
+        "worker_vm_id_start", "worker_vm_id_end", "lb_count", "cp_count", "worker_count",
+    }
+    try:
+        config = {key: (int(value) if key in integer_fields else str(value).strip()) for key, value in form.items()}
+        config["auto_suggest"] = "auto_suggest" in form
+        config["vm_name_include_cluster"] = "vm_name_include_cluster" in form
+        validated = validate_preference_config(config)
+    except (ValueError, TypeError) as exc:
+        used_ips, used_ids = used_allocations(db)
+        return templates.TemplateResponse(request, "settings.html", {
+            "preferences": {
+                **get_preferences(db).config, **{key: str(value) for key, value in form.items()},
+                "auto_suggest": "auto_suggest" in form,
+                "vm_name_include_cluster": "vm_name_include_cluster" in form,
+            }, "error": str(exc),
+            "used_ips": sorted(map(str, used_ips)), "used_vm_ids": sorted(used_ids),
+        }, status_code=400)
+    preference = get_preferences(db)
+    preference.config = validated
+    db.add(AuditEvent(action="update_preferences", object_type="preference", object_id="1"))
+    db.commit()
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 @app.get("/clusters/{cluster_id}/edit", response_class=HTMLResponse)

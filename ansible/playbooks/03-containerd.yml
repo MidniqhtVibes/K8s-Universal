@@ -9,6 +9,7 @@
           - containerd
         state: present
         update_cache: true
+        lock_timeout: 600
 
     - name: Create containerd config directory
       ansible.builtin.file:

@@ -36,7 +36,13 @@ def render_cluster(config: ClusterConfig, destination: Path, source_root: Path) 
         "dns_servers": [str(item) for item in config.network.dns_servers],
         "ssh_user": config.ssh.user,
         "ssh_public_key": config.ssh.public_key,
-        "nodes": {node.name: node.model_dump(mode="json") for node in config.nodes},
+        "nodes": {
+            node.name: {
+                **node.model_dump(mode="json"),
+                "vm_name": _proxmox_vm_name(config.name, node.name) if config.proxmox.vm_name_include_cluster else node.name,
+            }
+            for node in config.nodes
+        },
     }
     (generated / "terraform.auto.tfvars.json").write_text(json.dumps(tfvars, indent=2), encoding="utf-8")
 
@@ -118,3 +124,9 @@ def _refresh_tree(source: Path, destination: Path) -> None:
         dirs_exist_ok=True,
         ignore=shutil.ignore_patterns(".terraform", "*.tfstate*", "*.tfplan", "terraform.auto.tfvars.json", "inventory.generated.yml", "generated.yml"),
     )
+
+
+def _proxmox_vm_name(cluster_name: str, node_name: str) -> str:
+    # 63 characters keeps the generated name DNS-compatible as well.
+    prefix = cluster_name[: max(1, 62 - len(node_name))].rstrip("-")
+    return f"{prefix}-{node_name}"

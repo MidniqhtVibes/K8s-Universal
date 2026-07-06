@@ -20,3 +20,11 @@ def test_calico_crds_use_server_side_apply():
     assert "--server-side" in playbook
     assert "--force-conflicts" in playbook
     assert " create -f " not in playbook
+
+
+def test_package_install_waits_for_cloud_init_and_apt_locks():
+    project = Path(__file__).parents[1]
+    bootstrap = (project / "ansible/playbooks/01-bootstrap-os.yml").read_text(encoding="utf-8")
+    assert "cloud-init status --wait" in bootstrap
+    assert "lock_timeout: 600" in bootstrap
+    assert "dpkg --configure -a" in bootstrap

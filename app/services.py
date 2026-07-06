@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .generator import config_hash, render_cluster
+from .allocations import validate_cluster_allocations
 from .models import AuditEvent, Cluster, Credential, CredentialKind, Job, JobKind, JobStatus, User
 from .schemas import ClusterConfig
 from .security import decrypt_payload, encrypt_payload, hash_password
@@ -83,6 +84,7 @@ def build_cluster_from_form(form: dict[str, str], cluster_id: str | None = None)
             "bridge": form["bridge"].strip(),
             "vlan_id": int(form["vlan_id"]) if form.get("vlan_id", "").strip() else None,
             "verify_tls": form.get("verify_tls") == "on",
+            "vm_name_include_cluster": form.get("vm_name_include_cluster") == "on",
             "credential_ref": form["proxmox_credential"],
         },
         "network": {
@@ -118,6 +120,7 @@ def build_cluster_from_form(form: dict[str, str], cluster_id: str | None = None)
 
 
 def save_cluster(db: Session, config: ClusterConfig, data_root: Path, source_root: Path) -> Cluster:
+    validate_cluster_allocations(db, config)
     public = config.public_dict()
     digest = config_hash(public)
     cluster = db.get(Cluster, config.id)

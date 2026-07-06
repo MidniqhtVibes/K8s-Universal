@@ -1,7 +1,7 @@
 resource "proxmox_virtual_environment_vm" "k8s" {
   for_each = var.nodes
 
-  name      = each.key
+  name      = each.value.vm_name
   node_name = var.proxmox_node
   vm_id     = each.value.vm_id
 

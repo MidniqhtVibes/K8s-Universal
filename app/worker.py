@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from .config import get_settings
 from .db import SessionLocal
+from .generator import render_cluster
 from .manifests import render_snapshot
 from .models import ApplicationBundle, Cluster, ClusterStatus, Job, JobKind, JobStatus, ManifestRevision
 from .schemas import ClusterConfig
@@ -137,6 +138,9 @@ def execute(job_id: str) -> None:
         if job.kind in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY):
             execute_manifest_job(job, cluster, workspace)
             return
+        # Refresh generated inputs and IaC sources so existing clusters also pick
+        # up compatible runner changes after an application update.
+        render_cluster(config, workspace, settings.source_root)
         proxmox = credential_payload(db, config.proxmox.credential_ref, CredentialKind.PROXMOX)
         ssh = credential_payload(db, config.ssh.credential_ref, CredentialKind.SSH)
 

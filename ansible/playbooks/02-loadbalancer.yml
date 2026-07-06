@@ -11,6 +11,7 @@
           - keepalived
         state: present
         update_cache: true
+        lock_timeout: 600
 
     - name: Configure HAProxy
       ansible.builtin.copy:

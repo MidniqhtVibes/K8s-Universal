@@ -12,6 +12,7 @@ class ProxmoxConfig(BaseModel):
     bridge: str = "vmbr0"
     vlan_id: int | None = Field(default=None, ge=1, le=4094)
     verify_tls: bool = True
+    vm_name_include_cluster: bool = False
     credential_ref: str
 
 
@@ -130,4 +131,3 @@ class ClusterConfig(BaseModel):
 
     def public_dict(self) -> dict:
         return self.model_dump(mode="json")
-

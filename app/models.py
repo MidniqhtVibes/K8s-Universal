@@ -107,6 +107,13 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Preference(Base):
+    __tablename__ = "preferences"
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class ApplicationBundle(Base):
     __tablename__ = "application_bundles"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

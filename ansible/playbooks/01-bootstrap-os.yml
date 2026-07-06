@@ -3,6 +3,35 @@
   hosts: all
   become: true
   tasks:
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait --long
+      changed_when: false
+      async: 900
+      poll: 5
+
+    - name: Wait for apt and dpkg locks to become available
+      ansible.builtin.shell: |
+        set -o pipefail
+        timeout 600 bash -c '
+          while lslocks --noheadings --output PATH 2>/dev/null \
+            | grep -Eq "/var/lib/dpkg/lock(-frontend)?|/var/lib/apt/lists/lock|/var/cache/apt/archives/lock"; do
+            sleep 5
+          done
+        '
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Complete interrupted package configuration
+      ansible.builtin.command: dpkg --configure -a
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      changed_when: false
+      register: dpkg_configure
+      until: dpkg_configure.rc == 0
+      retries: 60
+      delay: 10
+
     - name: Set hostname
       ansible.builtin.hostname:
         name: "{{ inventory_hostname }}"
@@ -11,6 +40,7 @@
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
+        lock_timeout: 600
 
     - name: Install base packages
       ansible.builtin.apt:
@@ -30,6 +60,7 @@
           - ipvsadm
           - nfs-common
         state: present
+        lock_timeout: 600
 
     - name: Disable swap immediately
       ansible.builtin.command: swapoff -a

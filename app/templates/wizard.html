@@ -3,6 +3,7 @@
 <div class="page-head"><div><h1>Cluster konfigurieren</h1><p class="muted">Alle Werte werden vor dem Speichern und erneut vor dem Plan validiert.</p></div></div>
 {% if error %}<div class="error"><strong>Konfiguration ungültig:</strong> {{ error }}</div>{% endif %}
 <form method="post" action="{{ action }}" id="wizard" class="stack">
+  {% if used_ips or used_vm_ids %}<div class="card"><strong>Bereits durch aktive Cluster belegt</strong><p class="muted">IPs: {{ used_ips|join(', ') if used_ips else 'keine' }}<br>VM-IDs: {{ used_vm_ids|join(', ') if used_vm_ids else 'keine' }}</p></div>{% endif %}
   <section class="card"><h2>1 · Proxmox</h2><div class="form-grid">
     <label>Clustername<input name="name" value="{{ values.get('name','k8s-ha-lab') }}" required pattern="[a-z0-9-]+"></label>
     <label>Credential<select name="proxmox_credential" id="proxmox-credential" required><option value="">Auswählen</option>{% for item in credentials if item.kind.value == 'proxmox' %}<option value="credential://{{ item.id }}" data-id="{{ item.id }}" data-endpoint="{{ item.public_data.endpoint }}" {% if values.get('proxmox_credential') == 'credential://' + item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
@@ -13,6 +14,7 @@
     <label>Bridge<input name="bridge" id="bridge" list="proxmox-bridges" value="{{ values.get('bridge','vmbr0') }}" required></label>
     <label>VLAN optional<input type="number" name="vlan_id" min="1" max="4094" value="{{ values.get('vlan_id','') }}"></label>
     <label class="check"><input type="checkbox" name="verify_tls" {% if values.get('verify_tls','on') == 'on' %}checked{% endif %}> TLS prüfen</label>
+    <label class="check"><input type="checkbox" name="vm_name_include_cluster" {% if values.get('vm_name_include_cluster','') == 'on' %}checked{% endif %}> Clustername im Proxmox-VM-Namen</label>
   </div><datalist id="proxmox-nodes"></datalist><datalist id="proxmox-storages"></datalist><datalist id="proxmox-templates"></datalist><datalist id="proxmox-bridges"></datalist><button type="button" class="secondary" id="discover">Proxmox-Ressourcen erkennen</button><pre id="discovery-result" class="hidden"></pre></section>
 
   <section class="card"><h2>2 · Netzwerk</h2><div class="form-grid">

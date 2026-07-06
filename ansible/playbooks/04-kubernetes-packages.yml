@@ -25,6 +25,7 @@
     - name: Update apt cache
       ansible.builtin.apt:
         update_cache: true
+        lock_timeout: 600
 
     - name: Install kubelet kubeadm kubectl
       ansible.builtin.apt:
@@ -33,6 +34,7 @@
           - kubeadm
           - kubectl
         state: present
+        lock_timeout: 600
 
     - name: Hold Kubernetes packages
       ansible.builtin.dpkg_selections:

@@ -6,7 +6,7 @@ def valid_config() -> ClusterConfig:
         "schema_version": 1,
         "id": "00000000-0000-0000-0000-000000000001",
         "name": "test-cluster",
-        "proxmox": {"endpoint": "https://pve.test:8006/", "node": "pve", "datastore": "local-lvm", "template_vm_id": 9000, "bridge": "vmbr0", "verify_tls": False, "credential_ref": "credential://proxmox"},
+        "proxmox": {"endpoint": "https://pve.test:8006/", "node": "pve", "datastore": "local-lvm", "template_vm_id": 9000, "bridge": "vmbr0", "verify_tls": False, "vm_name_include_cluster": True, "credential_ref": "credential://proxmox"},
         "network": {"cidr": "10.10.10.0/24", "gateway": "10.10.10.1", "dns_servers": ["10.10.10.1"], "api_vip": "10.10.10.10"},
         "ssh": {"user": "ubuntu", "public_key": "ssh-ed25519 AAAATEST test", "credential_ref": "credential://ssh"},
         "kubernetes": {"version": "v1.33", "api_port": 6443, "pod_cidr": "192.168.0.0/16", "service_cidr": "10.96.0.0/12"},
@@ -19,4 +19,3 @@ def valid_config() -> ClusterConfig:
             {"name": "worker-01", "role": "worker", "vm_id": 321, "ip": "10.10.10.31", "cores": 2, "memory_mb": 4096, "disk_gb": 50},
         ],
     })
-
