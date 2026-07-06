@@ -18,6 +18,7 @@
         owner: root
         group: root
         mode: "0644"
+        validate: /usr/sbin/haproxy -c -f %s
         content: |
           global
               log /dev/log local0
@@ -104,11 +105,11 @@
 
               authentication {
                   auth_type PASS
-              auth_pass {{ lookup('env', 'KEEPALIVED_AUTH_PASS') }}
+                  auth_pass {{ lookup('env', 'KEEPALIVED_AUTH_PASS') }}
               }
 
               virtual_ipaddress {
-              {{ api_vip }}/{{ api_prefix }}
+                  {{ api_vip }}/{{ api_prefix }}
               }
 
               track_script {

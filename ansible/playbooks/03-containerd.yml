@@ -20,15 +20,23 @@
       ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
       args:
         creates: /etc/containerd/config.toml
+      notify: Restart containerd
 
     - name: Enable SystemdCgroup for containerd
       ansible.builtin.replace:
         path: /etc/containerd/config.toml
         regexp: 'SystemdCgroup = false'
         replace: 'SystemdCgroup = true'
+      notify: Restart containerd
 
-    - name: Restart and enable containerd
+    - name: Enable and start containerd
+      ansible.builtin.service:
+        name: containerd
+        state: started
+        enabled: true
+
+  handlers:
+    - name: Restart containerd
       ansible.builtin.service:
         name: containerd
         state: restarted
-        enabled: true

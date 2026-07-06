@@ -11,3 +11,4 @@
     - name: Join control plane
       ansible.builtin.command: "{{ hostvars[first_control_plane].control_plane_join_command }}"
       when: not kubelet_conf.stat.exists
+      no_log: true

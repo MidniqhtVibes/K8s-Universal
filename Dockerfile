@@ -25,7 +25,9 @@ COPY requirements.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY app app
 COPY tests tests
+COPY ansible ansible
 RUN curl -fsSLo app/static/htmx.min.js https://unpkg.com/htmx.org@2.0.6/dist/htmx.min.js
+RUN ansible-playbook --syntax-check -i ansible/inventory.ini ansible/site.yml
 COPY alembic.ini .
 COPY migrations migrations
 

@@ -49,14 +49,12 @@
           br_netfilter
 
     - name: Load overlay module
-      ansible.builtin.modprobe:
-        name: overlay
-        state: present
+      ansible.builtin.command: modprobe overlay
+      changed_when: false
 
     - name: Load br_netfilter module
-      ansible.builtin.modprobe:
-        name: br_netfilter
-        state: present
+      ansible.builtin.command: modprobe br_netfilter
+      changed_when: false
 
     - name: Configure sysctl for Kubernetes networking
       ansible.builtin.copy:

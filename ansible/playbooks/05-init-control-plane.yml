@@ -8,13 +8,19 @@
         path: /etc/kubernetes/admin.conf
       register: kubeadm_admin_conf
 
+    - name: Read installed kubeadm version
+      ansible.builtin.command: kubeadm version -o short
+      register: kubeadm_version
+      changed_when: false
+      when: not kubeadm_admin_conf.stat.exists
+
     - name: Create kubeadm config
       ansible.builtin.copy:
         dest: /root/kubeadm-config.yaml
         content: |
           apiVersion: kubeadm.k8s.io/v1beta4
           kind: ClusterConfiguration
-          kubernetesVersion: "{{ kubernetes_minor }}"
+          kubernetesVersion: "{{ kubeadm_version.stdout }}"
           controlPlaneEndpoint: "{{ control_plane_endpoint }}"
           networking:
             podSubnet: "{{ pod_cidr }}"

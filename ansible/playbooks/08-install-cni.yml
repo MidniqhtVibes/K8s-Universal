@@ -10,11 +10,11 @@
       changed_when: false
 
     - name: Install Calico CRDs
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf create -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/v1_crd_projectcalico_org.yaml
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/v1_crd_projectcalico_org.yaml
       when: calico_ns.rc != 0
 
     - name: Install Tigera operator
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf create -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
       when: calico_ns.rc != 0
 
     - name: Create Calico custom resources
@@ -47,3 +47,7 @@
     - name: Restart CoreDNS after HA join
       ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system rollout restart deployment coredns
       changed_when: true
+
+    - name: Wait for all Kubernetes nodes to become ready
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait --for=condition=Ready nodes --all --timeout=600s
+      changed_when: false
