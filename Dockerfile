@@ -31,6 +31,9 @@ RUN mkdir -p app/static/vendor \
     && curl -fsSLo app/static/vendor/xterm.js https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js \
     && curl -fsSLo app/static/vendor/xterm.css https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css \
     && curl -fsSLo app/static/vendor/xterm-addon-fit.js https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js
+RUN curl -fsSLo app/static/vendor/codemirror.js https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js \
+    && curl -fsSLo app/static/vendor/codemirror.css https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css \
+    && curl -fsSLo app/static/vendor/codemirror-yaml.js https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/yaml/yaml.js
 RUN ansible-playbook --syntax-check -i ansible/inventory.ini ansible/site.yml
 COPY alembic.ini .
 COPY migrations migrations

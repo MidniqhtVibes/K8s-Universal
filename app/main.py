@@ -17,7 +17,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import get_settings
 from .db import Base, SessionLocal, engine, get_db
-from .models import AuditEvent, Cluster, Credential, CredentialKind, Job, JobKind, JobStatus, User
+from .manifests import create_revision, ensure_default_bundle, validate_manifest_content, validate_manifest_path
+from .models import AuditEvent, ApplicationBundle, Cluster, Credential, CredentialKind, Job, JobKind, JobStatus, ManifestFile, ManifestRevision, User, utcnow
 from .kubectl_terminal import audit_safe_command, parse_kubectl_command
 from .proxmox import ProxmoxClient, ProxmoxError, split_token
 from .security import validate_ssh_keypair, verify_password
@@ -258,6 +259,161 @@ def cluster_terminal(cluster_id: str, request: Request, _: User = Depends(curren
     return templates.TemplateResponse(request, "terminal.html", {"cluster": cluster, "kubeconfig_available": kubeconfig_available})
 
 
+@app.get("/clusters/{cluster_id}/applications", response_class=HTMLResponse)
+def applications_page(cluster_id: str, request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    cluster = db.get(Cluster, cluster_id)
+    if not cluster:
+        raise HTTPException(404)
+    ensure_default_bundle(db, cluster)
+    bundles = db.scalars(select(ApplicationBundle).where(ApplicationBundle.cluster_id == cluster_id).order_by(ApplicationBundle.name)).all()
+    return templates.TemplateResponse(request, "applications.html", {"cluster": cluster, "bundles": bundles})
+
+
+@app.post("/clusters/{cluster_id}/applications")
+def create_application(
+    cluster_id: str, name: str = Form(), description: str = Form(""),
+    _: User = Depends(current_user), db: Session = Depends(get_db),
+):
+    cluster = db.get(Cluster, cluster_id)
+    normalized = name.strip().lower()
+    if not cluster:
+        raise HTTPException(404)
+    if not normalized or len(normalized) > 63 or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in normalized):
+        raise HTTPException(400, "Anwendungsname darf nur Kleinbuchstaben, Zahlen und Bindestriche enthalten")
+    if db.scalar(select(ApplicationBundle).where(ApplicationBundle.cluster_id == cluster_id, ApplicationBundle.name == normalized)):
+        raise HTTPException(409, "Eine Anwendung mit diesem Namen existiert bereits")
+    bundle = ApplicationBundle(cluster_id=cluster_id, name=normalized, description=description.strip()[:255])
+    db.add(bundle)
+    db.flush()
+    namespace = f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {normalized}\n"
+    bundle.files.append(ManifestFile(path="namespace.yaml", content=namespace))
+    db.flush()
+    create_revision(db, bundle, "Anwendung erstellt")
+    db.add(AuditEvent(action="create_application", object_type="application", object_id=bundle.id, details={"cluster_id": cluster_id, "name": normalized}))
+    db.commit()
+    return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}", status_code=303)
+
+
+@app.get("/clusters/{cluster_id}/applications/{bundle_id}", response_class=HTMLResponse)
+def application_editor(cluster_id: str, bundle_id: str, request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    cluster = db.get(Cluster, cluster_id)
+    bundle = db.get(ApplicationBundle, bundle_id)
+    if not cluster or not bundle or bundle.cluster_id != cluster_id:
+        raise HTTPException(404)
+    files = db.scalars(select(ManifestFile).where(ManifestFile.bundle_id == bundle.id).order_by(ManifestFile.path)).all()
+    selected_id = request.query_params.get("file")
+    selected = next((item for item in files if item.id == selected_id), files[0] if files else None)
+    revisions = db.scalars(select(ManifestRevision).where(ManifestRevision.bundle_id == bundle.id).order_by(ManifestRevision.version.desc()).limit(15)).all()
+    cluster_jobs = db.scalars(select(Job).where(Job.cluster_id == cluster_id).order_by(Job.created_at.desc()).limit(50)).all()
+    jobs = [job for job in cluster_jobs if job.payload.get("bundle_id") == bundle.id][:10]
+    kubeconfig_available = (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file()
+    return templates.TemplateResponse(request, "application_editor.html", {"cluster": cluster, "bundle": bundle, "files": files, "selected": selected, "revisions": revisions, "jobs": jobs, "kubeconfig_available": kubeconfig_available})
+
+
+@app.post("/clusters/{cluster_id}/applications/{bundle_id}/files")
+def create_manifest_file(
+    cluster_id: str, bundle_id: str, path: str = Form(),
+    _: User = Depends(current_user), db: Session = Depends(get_db),
+):
+    bundle = db.get(ApplicationBundle, bundle_id)
+    if not bundle or bundle.cluster_id != cluster_id:
+        raise HTTPException(404)
+    try:
+        normalized = validate_manifest_path(path)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if db.scalar(select(ManifestFile).where(ManifestFile.bundle_id == bundle.id, ManifestFile.path == normalized)):
+        raise HTTPException(409, "Eine Datei mit diesem Pfad existiert bereits")
+    manifest = ManifestFile(bundle_id=bundle.id, path=normalized, content="apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: example\n  namespace: default\ndata: {}\n")
+    db.add(manifest)
+    db.flush()
+    create_revision(db, bundle, f"Datei {normalized} erstellt")
+    db.commit()
+    return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}?file={manifest.id}", status_code=303)
+
+
+@app.post("/clusters/{cluster_id}/applications/{bundle_id}/files/{file_id}")
+def save_manifest_file(
+    cluster_id: str, bundle_id: str, file_id: str, content: str = Form(), message: str = Form("Manifest bearbeitet"),
+    _: User = Depends(current_user), db: Session = Depends(get_db),
+):
+    bundle = db.get(ApplicationBundle, bundle_id)
+    manifest = db.get(ManifestFile, file_id)
+    if not bundle or bundle.cluster_id != cluster_id or not manifest or manifest.bundle_id != bundle.id:
+        raise HTTPException(404)
+    try:
+        validate_manifest_content(content)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    manifest.content = content
+    bundle.updated_at = utcnow()
+    db.flush()
+    revision = create_revision(db, bundle, message or f"{manifest.path} bearbeitet")
+    db.add(AuditEvent(action="save_manifest", object_type="application", object_id=bundle.id, details={"file": manifest.path, "revision": revision.version}))
+    db.commit()
+    return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}?file={manifest.id}", status_code=303)
+
+
+@app.post("/clusters/{cluster_id}/applications/{bundle_id}/files/{file_id}/delete")
+def delete_manifest_file(cluster_id: str, bundle_id: str, file_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    bundle = db.get(ApplicationBundle, bundle_id)
+    manifest = db.get(ManifestFile, file_id)
+    if not bundle or bundle.cluster_id != cluster_id or not manifest or manifest.bundle_id != bundle.id:
+        raise HTTPException(404)
+    if len(bundle.files) <= 1:
+        raise HTTPException(409, "Eine Anwendung muss mindestens eine Manifestdatei enthalten")
+    path = manifest.path
+    bundle.files.remove(manifest)
+    bundle.updated_at = utcnow()
+    db.flush()
+    create_revision(db, bundle, f"Datei {path} entfernt")
+    db.commit()
+    return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}", status_code=303)
+
+
+@app.post("/clusters/{cluster_id}/applications/{bundle_id}/revisions/{revision_id}/restore")
+def restore_manifest_revision(cluster_id: str, bundle_id: str, revision_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    bundle = db.get(ApplicationBundle, bundle_id)
+    revision = db.get(ManifestRevision, revision_id)
+    if not bundle or bundle.cluster_id != cluster_id or not revision or revision.bundle_id != bundle.id:
+        raise HTTPException(404)
+    bundle.files.clear()
+    db.flush()
+    for path, content in revision.snapshot.items():
+        bundle.files.append(ManifestFile(path=path, content=content))
+    bundle.updated_at = utcnow()
+    db.flush()
+    restored = create_revision(db, bundle, f"Revision {revision.version} wiederhergestellt")
+    db.add(AuditEvent(action="restore_manifest_revision", object_type="application", object_id=bundle.id, details={"from": revision.version, "revision": restored.version}))
+    db.commit()
+    return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}", status_code=303)
+
+
+@app.post("/clusters/{cluster_id}/applications/{bundle_id}/jobs/{action}")
+def start_manifest_job(
+    cluster_id: str, bundle_id: str, action: str, apply_confirmation: str = Form(""),
+    _: User = Depends(current_user), db: Session = Depends(get_db),
+):
+    cluster = db.get(Cluster, cluster_id)
+    bundle = db.get(ApplicationBundle, bundle_id)
+    if not cluster or not bundle or bundle.cluster_id != cluster_id:
+        raise HTTPException(404)
+    if not (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file():
+        raise HTTPException(409, "Anwendungsjobs sind erst nach erfolgreichem Cluster-Apply möglich")
+    kinds = {"validate": JobKind.MANIFEST_VALIDATE, "diff": JobKind.MANIFEST_DIFF, "apply": JobKind.MANIFEST_APPLY}
+    if action not in kinds:
+        raise HTTPException(404)
+    if action == "apply" and apply_confirmation != bundle.name:
+        raise HTTPException(400, "Für Apply muss der Anwendungsname bestätigt werden")
+    revision = create_revision(db, bundle, f"Snapshot für {action}")
+    db.flush()
+    try:
+        queue_job(db, cluster, kinds[action], {"bundle_id": bundle.id, "revision_id": revision.id})
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}", status_code=303)
+
+
 @app.websocket("/ws/clusters/{cluster_id}/kubectl")
 async def kubectl_websocket(websocket: WebSocket, cluster_id: str):
     user_id = websocket.session.get("user_id")
@@ -274,11 +430,24 @@ async def kubectl_websocket(websocket: WebSocket, cluster_id: str):
         await websocket.close(code=4404)
         return
     await websocket.accept()
-    await websocket.send_json({"type": "ready", "cluster": cluster.name})
+    messages: asyncio.Queue[dict] = asyncio.Queue()
+
+    async def receive_messages() -> None:
+        try:
+            while True:
+                await messages.put(await websocket.receive_json())
+        except WebSocketDisconnect:
+            await messages.put({"type": "disconnect"})
+
+    receiver = asyncio.create_task(receive_messages())
     process: asyncio.subprocess.Process | None = None
     try:
+        await websocket.send_json({"type": "ready", "cluster": cluster.name})
+        disconnected = False
         while True:
-            message = await websocket.receive_json()
+            message = await messages.get()
+            if message.get("type") == "disconnect":
+                break
             if message.get("type") != "command":
                 continue
             raw = str(message.get("command", ""))
@@ -296,14 +465,19 @@ async def kubectl_websocket(websocket: WebSocket, cluster_id: str):
             interrupted = False
             while process.returncode is None:
                 output_task = asyncio.create_task(process.stdout.readline())
-                input_task = asyncio.create_task(websocket.receive_json())
-                done, pending = await asyncio.wait({output_task, input_task}, return_when=asyncio.FIRST_COMPLETED)
+                control_task = asyncio.create_task(messages.get())
+                done, pending = await asyncio.wait({output_task, control_task}, return_when=asyncio.FIRST_COMPLETED)
                 for task in pending:
                     task.cancel()
-                if input_task in done and input_task.result().get("type") == "interrupt":
-                    process.terminate()
-                    interrupted = True
-                    await process.wait()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                if control_task in done:
+                    control = control_task.result()
+                    if control.get("type") in ("interrupt", "disconnect"):
+                        process.terminate()
+                        interrupted = control.get("type") == "interrupt"
+                        disconnected = control.get("type") == "disconnect"
+                        await process.wait()
                 elif output_task in done:
                     line = output_task.result()
                     if line:
@@ -317,9 +491,13 @@ async def kubectl_websocket(websocket: WebSocket, cluster_id: str):
                     details={"command": audit_safe_command(parsed), "verb": parsed.verb, "mutating": parsed.mutating, "exit_code": exit_code},
                 ))
                 db.commit()
+            if disconnected:
+                break
             await websocket.send_json({"type": "exit", "code": exit_code, "interrupted": interrupted})
             process = None
-    except WebSocketDisconnect:
+    finally:
+        receiver.cancel()
+        await asyncio.gather(receiver, return_exceptions=True)
         if process and process.returncode is None:
             process.terminate()
             await process.wait()
@@ -329,6 +507,8 @@ async def kubectl_websocket(websocket: WebSocket, cluster_id: str):
 def start_job(cluster_id: str, kind: JobKind, destroy_confirmation: str = Form(""), _: User = Depends(current_user), db: Session = Depends(get_db)):
     cluster = db.get(Cluster, cluster_id)
     if not cluster:
+        raise HTTPException(404)
+    if kind not in (JobKind.PLAN, JobKind.APPLY, JobKind.VERIFY, JobKind.DESTROY_PLAN, JobKind.DESTROY):
         raise HTTPException(404)
     if kind in (JobKind.DESTROY_PLAN, JobKind.DESTROY) and destroy_confirmation != cluster.name:
         raise HTTPException(400, "Zur Bestätigung muss der Clustername eingegeben werden")

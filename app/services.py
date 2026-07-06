@@ -133,10 +133,12 @@ def save_cluster(db: Session, config: ClusterConfig, data_root: Path, source_roo
     render_cluster(config, data_root / "clusters" / config.id, source_root)
     db.add(AuditEvent(action="save_cluster", object_type="cluster", object_id=config.id, details={"config_hash": digest}))
     db.commit()
+    from .manifests import ensure_default_bundle
+    ensure_default_bundle(db, cluster)
     return cluster
 
 
-def queue_job(db: Session, cluster: Cluster, kind: JobKind) -> Job:
+def queue_job(db: Session, cluster: Cluster, kind: JobKind, payload: dict | None = None) -> Job:
     cluster = db.scalar(select(Cluster).where(Cluster.id == cluster.id).with_for_update())
     if cluster is None:
         raise ValueError("Cluster nicht gefunden")
@@ -148,7 +150,7 @@ def queue_job(db: Session, cluster: Cluster, kind: JobKind) -> Job:
         raise ValueError("Konfiguration wurde seit dem Terraform-Plan geändert")
     if kind == JobKind.DESTROY and cluster.destroy_planned_hash != cluster.config_hash:
         raise ValueError("Es liegt kein aktueller bestätigbarer Destroy-Plan vor")
-    job = Job(cluster_id=cluster.id, kind=kind, requested_config_hash=cluster.config_hash)
+    job = Job(cluster_id=cluster.id, kind=kind, requested_config_hash=cluster.config_hash, payload=payload or {})
     db.add(job)
     db.add(AuditEvent(action=f"queue_{kind.value}", object_type="cluster", object_id=cluster.id))
     db.commit()

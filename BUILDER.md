@@ -47,6 +47,19 @@ Nach einem erfolgreichen Destroy erhält der Cluster den Status `destroyed`. Ers
 
 Nach erfolgreichem Apply ist das clustergebundene Terminal über die Sidebar oder die Clusteransicht erreichbar. Read-only-Befehle wie `get`, `describe` und `logs` funktionieren direkt. Mutierende Befehle benötigen den aktivierten Administrationsmodus und eine Einzelbestätigung. Allgemeine Shellbefehle, Verbindungsoptionen sowie interaktive TTY-Funktionen sind gesperrt.
 
+## Anwendungs-Bundles
+
+Jeder Cluster besitzt eine Anwendungsverwaltung mit mehreren YAML-Dateien pro Bundle. Beim ersten Öffnen wird automatisch `nginx-demo` mit `namespace.yaml`, `deployment.yaml`, `service.yaml` und `ingress.yaml` angelegt. Das Beispiel ist zunächst nur ein Entwurf und wird nicht ungefragt ausgerollt.
+
+Der vorgesehene Ablauf lautet:
+
+1. Manifestdateien im YAML-Editor bearbeiten und als Revision speichern.
+2. **Serverseitig validieren** ausführen.
+3. Mit **Diff anzeigen** die Änderungen gegenüber dem Cluster prüfen.
+4. **Bundle anwenden** bestätigen und den Rollout im Joblog verfolgen.
+
+Jedes Speichern und jeder Lauf erzeugt eine unveränderliche Revision. Frühere Revisionen können als neuer Entwurf wiederhergestellt werden. Unverschlüsselte Ressourcen vom Typ `Secret` sind gesperrt; dafür ist später eine Integration mit SOPS oder Sealed Secrets vorgesehen.
+
 ## Proxmox-Berechtigungen
 
 Das Token soll nur die für VM-Cloning, VM-Konfiguration, Storage-Abfrage und Ressourcenerkennung benötigten Rechte besitzen. Kein Root-Passwort verwenden. Der genaue Rechteumfang hängt von Proxmox-Version, Pool- und Storage-Struktur ab und muss vor dem ersten echten Plan in der Zielumgebung geprüft werden.

@@ -30,6 +30,7 @@
             </a>
             <a href="/clusters/{{ sidebar_cluster.id }}/terminal" class="terminal-link {% if request.url.path == '/clusters/' + sidebar_cluster.id + '/terminal' %}active{% endif %}" title="kubectl Terminal">›_</a>
           </div>
+          <a href="/clusters/{{ sidebar_cluster.id }}/applications" class="cluster-sub-link {% if '/clusters/' + sidebar_cluster.id + '/applications' in request.url.path %}active{% endif %}"><span>⌘</span> Anwendungen</a>
           {% endfor %}
         </div>
         {% endif %}

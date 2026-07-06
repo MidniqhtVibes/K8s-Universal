@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Anwendungen · {{ cluster.name }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Anwendungen</h1><p class="muted">Deklarative Kubernetes-Manifeste für {{ cluster.name }}</p></div><a class="button secondary" href="/clusters/{{ cluster.id }}">Zur Clusterübersicht</a></div>
+<div class="grid application-grid">
+  {% for bundle in bundles %}
+  <a class="card application-card" href="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}">
+    <div class="row"><h2>{{ bundle.name }}</h2><span class="badge">{{ bundle.files|length }} Dateien</span></div>
+    <p>{{ bundle.description or 'Keine Beschreibung' }}</p>
+    <small>Aktualisiert {{ bundle.updated_at.strftime('%d.%m.%Y %H:%M') }}</small>
+  </a>
+  {% endfor %}
+</div>
+<section class="card new-application"><h2>Neue Anwendung</h2><form method="post" action="/clusters/{{ cluster.id }}/applications" class="form-grid"><label>Name<input name="name" required pattern="[a-z0-9-]+" placeholder="meine-anwendung"></label><label class="wide">Beschreibung<input name="description" placeholder="Zweck der Anwendung"></label><div class="form-submit"><button>Anwendung anlegen</button></div></form></section>
+{% endblock %}
+

@@ -1,3 +1,4 @@
+import copy
 import os
 import socket
 import subprocess
@@ -6,11 +7,13 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import yaml
 from sqlalchemy import select
 
 from .config import get_settings
 from .db import SessionLocal
-from .models import Cluster, ClusterStatus, Job, JobKind, JobStatus
+from .manifests import render_snapshot
+from .models import ApplicationBundle, Cluster, ClusterStatus, Job, JobKind, JobStatus, ManifestRevision
 from .schemas import ClusterConfig
 from .security import redact
 from .services import credential_payload
@@ -40,7 +43,14 @@ def append_log(job_id: str, text: str, secrets: list[str] | None = None) -> None
             db.commit()
 
 
-def run_command(job: Job, command: list[str], cwd: Path, env: dict[str, str], secrets: list[str]) -> None:
+def run_command(
+    job: Job,
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    secrets: list[str],
+    allowed_codes: frozenset[int] = frozenset({0}),
+) -> int:
     ensure_not_cancelled(job.id)
     append_log(job.id, f"\n$ {' '.join(command)}\n")
     process = subprocess.Popen(
@@ -66,8 +76,9 @@ def run_command(job: Job, command: list[str], cwd: Path, env: dict[str, str], se
                 process.wait(timeout=5)
             raise
     code = process.wait()
-    if code != 0:
+    if code not in allowed_codes:
         raise RuntimeError(f"Befehl fehlgeschlagen ({code}): {' '.join(command)}")
+    return code
 
 
 def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
@@ -122,6 +133,10 @@ def execute(job_id: str) -> None:
         if not cluster or cluster.config_hash != job.requested_config_hash:
             raise RuntimeError("Job-Konfiguration ist veraltet")
         config = ClusterConfig.model_validate(cluster.config)
+        workspace = settings.data_root / "clusters" / config.id
+        if job.kind in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY):
+            execute_manifest_job(job, cluster, workspace)
+            return
         proxmox = credential_payload(db, config.proxmox.credential_ref, CredentialKind.PROXMOX)
         ssh = credential_payload(db, config.ssh.credential_ref, CredentialKind.SSH)
 
@@ -199,6 +214,66 @@ def execute(job_id: str) -> None:
                     db.commit()
 
 
+def execute_manifest_job(job: Job, cluster: Cluster, workspace: Path) -> None:
+    kubeconfig = workspace / "kubeconfig"
+    if not kubeconfig.is_file():
+        raise RuntimeError("Manifest-Jobs benötigen eine vorhandene Cluster-Kubeconfig")
+    revision_id = str(job.payload.get("revision_id", ""))
+    with SessionLocal() as db:
+        revision = db.get(ManifestRevision, revision_id)
+        bundle = db.get(ApplicationBundle, revision.bundle_id) if revision else None
+        if not revision or not bundle or bundle.cluster_id != cluster.id:
+            raise RuntimeError("Manifest-Revision gehört nicht zu diesem Cluster")
+        rendered, documents = render_snapshot(revision.snapshot)
+        revision_version = revision.version
+        bundle_name = bundle.name
+    append_log(job.id, f"Anwendung {bundle_name}, Revision {revision_version}\n")
+    env = os.environ.copy()
+    with tempfile.TemporaryDirectory(prefix="cluster-manifests-") as temporary:
+        manifest = Path(temporary) / "bundle.yaml"
+        manifest.write_text(rendered, encoding="utf-8")
+        declared_namespaces = {
+            str(document.get("metadata", {}).get("name"))
+            for document in documents
+            if document.get("kind") == "Namespace"
+        }
+        validation_documents = copy.deepcopy(documents)
+        remapped = 0
+        for document in validation_documents:
+            metadata = document.get("metadata", {})
+            if document.get("kind") != "Namespace" and metadata.get("namespace") in declared_namespaces:
+                metadata["namespace"] = "default"
+                remapped += 1
+        validation_manifest = Path(temporary) / "validation.yaml"
+        validation_manifest.write_text(yaml.safe_dump_all(validation_documents, sort_keys=False), encoding="utf-8")
+        if remapped:
+            append_log(job.id, f"Servervalidierung: {remapped} Ressourcen aus neu deklarierten Namespaces werden temporär gegen 'default' geprüft.\n")
+        base = ["kubectl", "--kubeconfig", str(kubeconfig)]
+        run_command(job, [*base, "apply", "--server-side", "--force-conflicts", "--field-manager=cluster-builder", "--dry-run=server", "-f", str(validation_manifest)], workspace, env, [])
+        if job.kind == JobKind.MANIFEST_VALIDATE:
+            append_log(job.id, "Serverseitige Validierung erfolgreich.\n")
+            return
+        if job.kind == JobKind.MANIFEST_DIFF:
+            code = run_command(job, [*base, "diff", "--server-side", "--force-conflicts", "--field-manager=cluster-builder", "-f", str(manifest)], workspace, env, [], frozenset({0, 1}))
+            append_log(job.id, "Keine Änderungen.\n" if code == 0 else "Diff enthält Änderungen (Exit 1 ist bei kubectl diff normal).\n")
+            return
+        run_command(job, [*base, "apply", "--server-side", "--force-conflicts", "--field-manager=cluster-builder", "-f", str(manifest)], workspace, env, [])
+        for document in documents:
+            kind = str(document.get("kind", "")).lower()
+            if kind not in {"deployment", "statefulset", "daemonset"}:
+                continue
+            metadata = document.get("metadata", {})
+            namespace = str(metadata.get("namespace", "default"))
+            name = str(metadata["name"])
+            run_command(job, [*base, "-n", namespace, "rollout", "status", f"{kind}/{name}", "--timeout=300s"], workspace, env, [])
+    with SessionLocal() as db:
+        revision = db.get(ManifestRevision, revision_id)
+        if revision:
+            revision.applied_at = datetime.now(UTC)
+            db.commit()
+    append_log(job.id, "Anwendungs-Bundle erfolgreich angewendet.\n")
+
+
 def verify_cluster(job: Job, workspace: Path, env: dict[str, str], secrets: list[str]) -> None:
     kubeconfig = workspace / "kubeconfig"
     run_command(job, ["kubectl", "--kubeconfig", str(kubeconfig), "get", "nodes", "-o", "wide"], workspace, env, secrets)
@@ -239,9 +314,10 @@ def finish_job(job_id: str, error: Exception | None = None) -> None:
         elif error:
             job.status = JobStatus.FAILED
             job.error = redact(str(error))
-            cluster = db.get(Cluster, job.cluster_id)
-            if cluster:
-                cluster.status = ClusterStatus.FAILED
+            if job.kind not in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY):
+                cluster = db.get(Cluster, job.cluster_id)
+                if cluster:
+                    cluster.status = ClusterStatus.FAILED
         else:
             job.status = JobStatus.SUCCEEDED
         db.commit()

@@ -38,6 +38,8 @@ header {
 .sidebar nav .cluster-link.active { box-shadow: none; background: #17283a; color: white; }
 .sidebar nav .terminal-link { justify-content: center; padding: 7px 4px; color: #70849a; font-family: ui-monospace, monospace; }
 .sidebar nav .terminal-link:hover, .sidebar nav .terminal-link.active { color: var(--accent); background: #17283a; box-shadow: none; }
+.sidebar nav .cluster-sub-link { margin-left: 20px; padding: 5px 8px; font-size: .76rem; color: #74889e; }
+.sidebar nav .cluster-sub-link:hover, .sidebar nav .cluster-sub-link.active { color: #b8f1df; background: #142638; box-shadow: none; }
 .cluster-link-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cluster-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: #65788d; }
 .cluster-dot.ready { background: #63d4b3; }
@@ -80,9 +82,43 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .terminal-status.connected { background: #63d4b3; box-shadow: 0 0 8px rgb(99 212 179 / 60%); }
 .admin-toggle { flex-direction: row; align-items: center; font-size: .8rem; color: #e8bd63; }
 .admin-toggle input { width: auto; }
-#terminal { height: 560px; padding: 10px; background: #07101a; }
+#terminal { height: min(62vh, 560px); min-height: 380px; padding: 8px; background: #07101a; }
 .terminal-help { padding: 0 16px 14px; margin: 0; background: #07101a; font-size: .78rem; }
 kbd { border: 1px solid #43556b; background: #182536; border-radius: 4px; padding: 1px 5px; }
+.application-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.application-card { color: inherit; text-decoration: none; transition: .15s; }
+.application-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.form-submit { display: flex; align-items: end; }
+.manifest-workbench { display: grid; grid-template-columns: 220px minmax(420px, 1fr) 280px; gap: 16px; align-items: start; }
+.manifest-files, .manifest-inspector { position: sticky; top: 84px; max-height: calc(100vh - 105px); overflow: auto; }
+.manifest-files { padding: 16px; }
+.manifest-files nav { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; }
+.manifest-files nav a { display: flex; gap: 7px; align-items: center; padding: 8px 9px; border-radius: 7px; color: #9eb0c3; text-decoration: none; font-size: .85rem; overflow: hidden; text-overflow: ellipsis; }
+.manifest-files nav a:hover, .manifest-files nav a.active { background: #1a2b40; color: white; }
+.new-file-form { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 6px; }
+.new-file-form button { padding: 8px; }
+.manifest-editor { padding: 0; overflow: hidden; }
+.editor-toolbar { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; background: var(--panel-raised); border-bottom: 1px solid var(--line); }
+.editor-toolbar .actions { justify-content: flex-end; }
+.editor-toolbar input { max-width: 240px; }
+.delete-file-form { padding: 10px 14px; border-top: 1px solid var(--line); text-align: right; }
+.manifest-inspector { padding: 16px; }
+.full { width: 100%; }
+.revision-list { display: flex; flex-direction: column; gap: 9px; }
+.revision { border: 1px solid var(--line); border-radius: 8px; padding: 9px; background: #0c1725; }
+.revision > div { display: flex; align-items: center; gap: 7px; }
+.revision p { margin: 6px 0; color: #8fa1b5; font-size: .78rem; word-break: break-word; }
+.link-button { background: none; color: var(--accent); padding: 0; font-size: .75rem; }
+.CodeMirror { height: 620px; background: #07101a; color: #dce7f2; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.55; }
+.cm-s-cluster-builder.CodeMirror { background: #07101a; color: #dce7f2; }
+.cm-s-cluster-builder .CodeMirror-gutters { background: #0a1522; border-right: 1px solid #26364b; }
+.cm-s-cluster-builder .CodeMirror-linenumber { color: #52677e; }
+.cm-s-cluster-builder .CodeMirror-cursor { border-left-color: var(--accent); }
+.cm-s-cluster-builder .cm-atom, .cm-s-cluster-builder .cm-number { color: #d7a7f7; }
+.cm-s-cluster-builder .cm-string { color: #87d9be; }
+.cm-s-cluster-builder .cm-meta { color: #68b8ed; }
+.cm-s-cluster-builder .cm-comment { color: #63778d; }
+.cm-s-cluster-builder .cm-def, .cm-s-cluster-builder .cm-variable-2 { color: #e8c56d; }
 .badge { display: inline-flex; padding: 5px 9px; border-radius: 999px; background: #29394d; color: #c5d2df; font-size: .78rem; font-weight: 800; }
 .badge.ready, .badge.succeeded { background: #174638; color: #75e4bd; }
 .badge.failed { background: #511e29; color: #ffabb4; }
@@ -96,13 +132,16 @@ details { border-top: 1px solid var(--line); padding: 14px 0; }
 summary { display: flex; gap: 14px; align-items: center; cursor: pointer; }
 .hidden { display: none; }
 hr { border: 0; border-top: 1px solid var(--line); width: 100%; }
-.http-warning { position: fixed; left: calc(var(--sidebar) + 50%); bottom: 12px; transform: translateX(-50%); background: #5a4110; color: #ffe4a0; border: 1px solid #9c7625; padding: 8px 14px; border-radius: 8px; font-size: .78rem; z-index: 20; }
+.http-warning { position: fixed; left: calc((100vw + var(--sidebar)) / 2); bottom: 12px; transform: translateX(-50%); max-width: calc(100vw - var(--sidebar) - 32px); white-space: normal; text-align: center; background: #5a4110; color: #ffe4a0; border: 1px solid #9c7625; padding: 8px 14px; border-radius: 8px; font-size: .78rem; z-index: 20; }
 @media (max-width: 900px) {
   .app-shell { display: block; }
   .sidebar { position: static; width: 100%; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 16px; }
   .sidebar-label { display: none; }
   .sidebar nav { flex-direction: row; overflow-x: auto; }
   .cluster-links { display: none; }
+  .manifest-workbench { grid-template-columns: 1fr; }
+  .manifest-files, .manifest-inspector { position: static; max-height: none; }
+  .editor-toolbar { align-items: stretch; flex-direction: column; }
   main { padding: 26px 18px 70px; }
   .two, .form-grid, .form-grid.compact { grid-template-columns: 1fr; }
   .wide { grid-column: auto; }

@@ -5,10 +5,11 @@ const adminMode = document.querySelector('#admin-mode');
 const terminal = new Terminal({cursorBlink: true, convertEol: true, fontSize: 14, fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace', theme: {background: '#07101a', foreground: '#dce7f2', cursor: '#63d4b3'}});
 const fitAddon = new FitAddon.FitAddon();
 terminal.loadAddon(fitAddon); terminal.open(container); fitAddon.fit();
+setTimeout(() => fitAddon.fit(), 100);
 window.addEventListener('resize', () => fitAddon.fit());
 let buffer = ''; let busy = true; const history = []; let historyIndex = 0;
 const readOnlyVerbs = new Set(['api-resources','api-versions','auth','cluster-info','describe','diff','explain','get','logs','options','top','version','wait']);
-const prompt = () => { busy = false; buffer = ''; terminal.write('\r\n\x1b[32mkubectl>\x1b[0m '); };
+const prompt = () => { busy = false; buffer = ''; terminal.write('\r\n\x1b[32mkubectl>\x1b[0m '); terminal.scrollToBottom(); };
 const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
 const socket = new WebSocket(`${scheme}://${location.host}/ws/clusters/${clusterId}/kubectl`);
 socket.onopen = () => { statusDot.classList.add('connected'); };
@@ -16,12 +17,12 @@ socket.onclose = () => { statusDot.classList.remove('connected'); terminal.write
 socket.onmessage = event => {
   const message = JSON.parse(event.data);
   if (message.type === 'ready') { terminal.writeln(`Verbunden mit ${message.cluster}.`); terminal.writeln('Beispiel: get nodes -o wide'); prompt(); }
-  if (message.type === 'output') terminal.write(message.data);
+  if (message.type === 'output') { terminal.write(message.data); terminal.scrollToBottom(); }
   if (message.type === 'error') { terminal.write(`\r\n\x1b[31m${message.message}\x1b[0m`); prompt(); }
   if (message.type === 'exit') { terminal.write(`\r\n\x1b[90m[Exit ${message.code}${message.interrupted ? ', abgebrochen' : ''}]\x1b[0m`); prompt(); }
 };
 terminal.onData(data => {
-  if (data === '\u0003') { if (busy) socket.send(JSON.stringify({type: 'interrupt'})); else terminal.write('^C'); return; }
+  if (data === '\u0003') { if (busy && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type: 'interrupt'})); else terminal.write('^C'); return; }
   if (busy) return;
   if (data === '\r') {
     const command = buffer.trim(); terminal.write('\r\n');
@@ -32,6 +33,7 @@ terminal.onData(data => {
     const confirmMutation = mutating && window.confirm(`Mutierenden Befehl wirklich ausführen?\n\nkubectl ${command}`);
     if (mutating && !confirmMutation) { terminal.write('\x1b[33mAbgebrochen.\x1b[0m'); prompt(); return; }
     history.push(command); historyIndex = history.length; busy = true;
+    if (socket.readyState !== WebSocket.OPEN) { terminal.write('\x1b[31mTerminalverbindung ist nicht verfügbar.\x1b[0m'); prompt(); return; }
     socket.send(JSON.stringify({type: 'command', command, confirm_mutation: confirmMutation})); return;
   }
   if (data === '\u007f') { if (buffer.length) { buffer = buffer.slice(0, -1); terminal.write('\b \b'); } return; }
