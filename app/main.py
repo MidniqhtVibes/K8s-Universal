@@ -1,9 +1,12 @@
+import asyncio
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -14,14 +17,26 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .config import get_settings
 from .db import Base, SessionLocal, engine, get_db
-from .models import Cluster, Credential, CredentialKind, Job, JobKind, JobStatus, User
+from .models import AuditEvent, Cluster, Credential, CredentialKind, Job, JobKind, JobStatus, User
+from .kubectl_terminal import audit_safe_command, parse_kubectl_command
 from .proxmox import ProxmoxClient, ProxmoxError, split_token
 from .security import validate_ssh_keypair, verify_password
 from .services import bootstrap_database, build_cluster_from_form, credential_payload, queue_job, save_cluster, store_credential
 
 
 settings = get_settings()
-templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+
+
+def sidebar_context(_: Request) -> dict:
+    with SessionLocal() as db:
+        clusters = db.scalars(select(Cluster).order_by(Cluster.name)).all()
+        return {"sidebar_clusters": clusters}
+
+
+templates = Jinja2Templates(
+    directory=Path(__file__).parent / "templates",
+    context_processors=[sidebar_context],
+)
 
 
 @asynccontextmanager
@@ -230,7 +245,84 @@ def cluster_detail(cluster_id: str, request: Request, _: User = Depends(current_
     if not cluster:
         raise HTTPException(404)
     jobs = db.scalars(select(Job).where(Job.cluster_id == cluster.id).order_by(Job.created_at.desc())).all()
-    return templates.TemplateResponse(request, "cluster.html", {"cluster": cluster, "jobs": jobs})
+    kubeconfig_available = (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file()
+    return templates.TemplateResponse(request, "cluster.html", {"cluster": cluster, "jobs": jobs, "kubeconfig_available": kubeconfig_available})
+
+
+@app.get("/clusters/{cluster_id}/terminal", response_class=HTMLResponse)
+def cluster_terminal(cluster_id: str, request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    cluster = db.get(Cluster, cluster_id)
+    if not cluster:
+        raise HTTPException(404)
+    kubeconfig_available = (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file()
+    return templates.TemplateResponse(request, "terminal.html", {"cluster": cluster, "kubeconfig_available": kubeconfig_available})
+
+
+@app.websocket("/ws/clusters/{cluster_id}/kubectl")
+async def kubectl_websocket(websocket: WebSocket, cluster_id: str):
+    user_id = websocket.session.get("user_id")
+    origin = websocket.headers.get("origin")
+    host = websocket.headers.get("host")
+    if not user_id or (origin and urlsplit(origin).netloc != host):
+        await websocket.close(code=4401)
+        return
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+        cluster = db.get(Cluster, cluster_id)
+    kubeconfig = settings.data_root / "clusters" / cluster_id / "kubeconfig"
+    if not user or not user.enabled or not cluster or not kubeconfig.is_file():
+        await websocket.close(code=4404)
+        return
+    await websocket.accept()
+    await websocket.send_json({"type": "ready", "cluster": cluster.name})
+    process: asyncio.subprocess.Process | None = None
+    try:
+        while True:
+            message = await websocket.receive_json()
+            if message.get("type") != "command":
+                continue
+            raw = str(message.get("command", ""))
+            try:
+                parsed = parse_kubectl_command(raw, bool(message.get("confirm_mutation")))
+            except (ValueError, PermissionError) as exc:
+                await websocket.send_json({"type": "error", "message": str(exc)})
+                continue
+            await websocket.send_json({"type": "start", "mutating": parsed.mutating})
+            process = await asyncio.create_subprocess_exec(
+                "kubectl", "--kubeconfig", str(kubeconfig), *parsed.args,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            assert process.stdout is not None
+            interrupted = False
+            while process.returncode is None:
+                output_task = asyncio.create_task(process.stdout.readline())
+                input_task = asyncio.create_task(websocket.receive_json())
+                done, pending = await asyncio.wait({output_task, input_task}, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                if input_task in done and input_task.result().get("type") == "interrupt":
+                    process.terminate()
+                    interrupted = True
+                    await process.wait()
+                elif output_task in done:
+                    line = output_task.result()
+                    if line:
+                        await websocket.send_json({"type": "output", "data": line.decode(errors="replace")})
+                    else:
+                        await process.wait()
+            exit_code = process.returncode
+            with SessionLocal() as db:
+                db.add(AuditEvent(
+                    action="kubectl_command", object_type="cluster", object_id=cluster_id,
+                    details={"command": audit_safe_command(parsed), "verb": parsed.verb, "mutating": parsed.mutating, "exit_code": exit_code},
+                ))
+                db.commit()
+            await websocket.send_json({"type": "exit", "code": exit_code, "interrupted": interrupted})
+            process = None
+    except WebSocketDisconnect:
+        if process and process.returncode is None:
+            process.terminate()
+            await process.wait()
 
 
 @app.post("/clusters/{cluster_id}/jobs/{kind}")
@@ -240,6 +332,8 @@ def start_job(cluster_id: str, kind: JobKind, destroy_confirmation: str = Form("
         raise HTTPException(404)
     if kind in (JobKind.DESTROY_PLAN, JobKind.DESTROY) and destroy_confirmation != cluster.name:
         raise HTTPException(400, "Zur Bestätigung muss der Clustername eingegeben werden")
+    if kind == JobKind.VERIFY and not (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file():
+        raise HTTPException(409, "Clusterprüfung ist erst nach einem erfolgreichen Apply mit erzeugter Kubeconfig möglich")
     try:
         queue_job(db, cluster, kind)
     except ValueError as exc:
@@ -266,3 +360,32 @@ def cancel_job(job_id: str, _: User = Depends(current_user), db: Session = Depen
         job.cancel_requested = True
     db.commit()
     return RedirectResponse(f"/clusters/{job.cluster_id}", status_code=303)
+
+
+@app.post("/clusters/{cluster_id}/delete")
+def delete_cluster_record(
+    cluster_id: str,
+    delete_confirmation: str = Form(),
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    cluster = db.get(Cluster, cluster_id)
+    if not cluster:
+        raise HTTPException(404)
+    if cluster.status.value != "destroyed":
+        raise HTTPException(409, "Der Builder-Eintrag kann erst nach erfolgreichem Infrastruktur-Destroy gelöscht werden")
+    if delete_confirmation != cluster.name:
+        raise HTTPException(400, "Zur Bestätigung muss der Clustername eingegeben werden")
+    active = db.scalar(select(Job).where(Job.cluster_id == cluster_id, Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING])))
+    if active:
+        raise HTTPException(409, "Cluster kann während eines laufenden Jobs nicht gelöscht werden")
+    clusters_root = (settings.data_root / "clusters").resolve()
+    workspace = (clusters_root / cluster.id).resolve()
+    if workspace.parent != clusters_root:
+        raise HTTPException(400, "Ungültiger Cluster-Arbeitsbereich")
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    db.add(AuditEvent(action="delete_cluster_record", object_type="cluster", object_id=cluster.id, details={"name": cluster.name}))
+    db.delete(cluster)
+    db.commit()
+    return RedirectResponse("/", status_code=303)

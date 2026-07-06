@@ -41,6 +41,12 @@ Danach mit Benutzer `admin` und `INITIAL_ADMIN_PASSWORD` anmelden. Das initiale 
 
 Destroy ist zweistufig. Zuerst wird nach Eingabe des Clusternamens ein Destroy-Plan erzeugt. Erst dieser unveränderte Plan kann danach angewendet werden.
 
+Nach einem erfolgreichen Destroy erhält der Cluster den Status `destroyed`. Erst dann erscheint die zusätzliche Aktion **Cluster endgültig entfernen**. Sie löscht den Builder-Eintrag sowie dessen lokalen Terraform-State, Kubeconfig, generierte Dateien und Jobdaten. Credentials bleiben erhalten.
+
+## kubectl-Terminal
+
+Nach erfolgreichem Apply ist das clustergebundene Terminal über die Sidebar oder die Clusteransicht erreichbar. Read-only-Befehle wie `get`, `describe` und `logs` funktionieren direkt. Mutierende Befehle benötigen den aktivierten Administrationsmodus und eine Einzelbestätigung. Allgemeine Shellbefehle, Verbindungsoptionen sowie interaktive TTY-Funktionen sind gesperrt.
+
 ## Proxmox-Berechtigungen
 
 Das Token soll nur die für VM-Cloning, VM-Konfiguration, Storage-Abfrage und Ressourcenerkennung benötigten Rechte besitzen. Kein Root-Passwort verwenden. Der genaue Rechteumfang hängt von Proxmox-Version, Pool- und Storage-Struktur ab und muss vor dem ersten echten Plan in der Zielumgebung geprüft werden.
@@ -78,4 +84,3 @@ Die Make-Targets `render`, `plan`, `infra`, `ping`, `k8s` und `check` arbeiten a
 - keine Worker-Skalierung und keine Kubernetes-Upgrades
 - Calico und Traefik als unterstützte Addons
 - HTTP nur für ein vertrauenswürdiges internes Netz; HTTPS ist der nächste Härtungsschritt
-

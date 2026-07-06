@@ -3,23 +3,65 @@
   hosts: control_plane[0]
   become: true
   tasks:
-    - name: Check if Calico namespace exists
-      ansible.builtin.shell: kubectl --kubeconfig /etc/kubernetes/admin.conf get ns tigera-operator
-      register: calico_ns
-      failed_when: false
+    - name: Apply Calico CRDs using server-side apply
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
+          - apply
+          - --server-side
+          - --force-conflicts
+          - -f
+          - "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/v1_crd_projectcalico_org.yaml"
+      register: calico_crds
+      changed_when: "'serverside-applied' in calico_crds.stdout or 'created' in calico_crds.stdout"
+
+    - name: Wait for Calico operator CRDs
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
+          - wait
+          - --for=condition=Established
+          - crd/installations.operator.tigera.io
+          - crd/apiservers.operator.tigera.io
+          - --timeout=180s
       changed_when: false
 
-    - name: Install Calico CRDs
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/v1_crd_projectcalico_org.yaml
-      when: calico_ns.rc != 0
+    - name: Apply Tigera operator using server-side apply
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
+          - apply
+          - --server-side
+          - --force-conflicts
+          - -f
+          - "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml"
+      register: tigera_operator
+      changed_when: "'serverside-applied' in tigera_operator.stdout or 'created' in tigera_operator.stdout"
 
-    - name: Install Tigera operator
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
-      when: calico_ns.rc != 0
+    - name: Wait for Tigera operator deployment
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
+          - -n
+          - tigera-operator
+          - rollout
+          - status
+          - deployment/tigera-operator
+          - --timeout=300s
+      changed_when: false
 
-    - name: Create Calico custom resources
+    - name: Create Calico custom resources manifest
       ansible.builtin.copy:
         dest: /root/calico-custom-resources.yaml
+        mode: "0600"
         content: |
           apiVersion: operator.tigera.io/v1
           kind: Installation
@@ -28,11 +70,11 @@
           spec:
             calicoNetwork:
               ipPools:
-              - blockSize: 26
-                cidr: {{ pod_cidr }}
-                encapsulation: VXLANCrossSubnet
-                natOutgoing: Enabled
-                nodeSelector: all()
+                - blockSize: 26
+                  cidr: {{ pod_cidr }}
+                  encapsulation: VXLANCrossSubnet
+                  natOutgoing: Enabled
+                  nodeSelector: all()
           ---
           apiVersion: operator.tigera.io/v1
           kind: APIServer
@@ -40,14 +82,43 @@
             name: default
           spec: {}
 
-    - name: Apply Calico custom resources
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f /root/calico-custom-resources.yaml
-      when: calico_ns.rc != 0
-
-    - name: Restart CoreDNS after HA join
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system rollout restart deployment coredns
-      changed_when: true
+    - name: Apply Calico custom resources using server-side apply
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
+          - apply
+          - --server-side
+          - --force-conflicts
+          - -f
+          - /root/calico-custom-resources.yaml
+      register: calico_custom_resources
+      changed_when: "'serverside-applied' in calico_custom_resources.stdout or 'created' in calico_custom_resources.stdout"
 
     - name: Wait for all Kubernetes nodes to become ready
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait --for=condition=Ready nodes --all --timeout=600s
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
+          - wait
+          - --for=condition=Ready
+          - nodes
+          - --all
+          - --timeout=600s
+      changed_when: false
+
+    - name: Wait for CoreDNS rollout
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
+          - -n
+          - kube-system
+          - rollout
+          - status
+          - deployment/coredns
+          - --timeout=300s
       changed_when: false

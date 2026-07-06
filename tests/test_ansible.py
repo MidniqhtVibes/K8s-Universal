@@ -12,3 +12,11 @@ def test_all_ansible_playbooks_resolve_core_modules():
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_calico_crds_use_server_side_apply():
+    project = Path(__file__).parents[1]
+    playbook = (project / "ansible/playbooks/08-install-cni.yml").read_text(encoding="utf-8")
+    assert "--server-side" in playbook
+    assert "--force-conflicts" in playbook
+    assert " create -f " not in playbook

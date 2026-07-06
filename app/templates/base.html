@@ -20,10 +20,22 @@
       <div class="sidebar-label">Verwaltung</div>
       <nav>
         <a href="/" class="{% if request.url.path == '/' or (request.url.path.startswith('/clusters/') and request.url.path != '/clusters/new') %}active{% endif %}"><span>▦</span> Cluster</a>
+        {% if sidebar_clusters %}
+        <div class="cluster-links">
+          {% for sidebar_cluster in sidebar_clusters %}
+          <div class="cluster-entry">
+            <a href="/clusters/{{ sidebar_cluster.id }}" class="cluster-link {% if request.url.path == '/clusters/' + sidebar_cluster.id %}active{% endif %}">
+              <span class="cluster-dot {{ sidebar_cluster.status.value }}"></span>
+              <span class="cluster-link-text">{{ sidebar_cluster.name }}</span>
+            </a>
+            <a href="/clusters/{{ sidebar_cluster.id }}/terminal" class="terminal-link {% if request.url.path == '/clusters/' + sidebar_cluster.id + '/terminal' %}active{% endif %}" title="kubectl Terminal">›_</a>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
         <a href="/clusters/new" class="{% if request.url.path == '/clusters/new' %}active{% endif %}"><span>＋</span> Neuer Cluster</a>
         <a href="/credentials" class="{% if request.url.path == '/credentials' %}active{% endif %}"><span>◆</span> Credentials</a>
       </nav>
-      <div class="sidebar-note"><strong>Lifecycle</strong><span>Konfigurieren</span><span>Planen</span><span>Anwenden</span><span>Prüfen</span></div>
     </aside>
     {% endif %}
     <main>{% block content %}{% endblock %}</main>
