@@ -1,5 +1,7 @@
 # Projektdokumentation: HA-Kubernetes-Cluster auf Proxmox mit Ingress
 
+> **Neu:** Das Repository enthält jetzt einen webbasierten Cluster Builder. Installation, Sicherheitsmodell und Bedienung stehen in [BUILDER.md](BUILDER.md). Die unten dokumentierte Beispielarchitektur bleibt als fachlicher Hintergrund erhalten; konkrete Werte werden durch den Wizard und die zentrale `cluster.yaml` erzeugt.
+
 ## 1. Ziel des Projekts
 
 Dieses Projekt beschreibt den Aufbau eines wiederverwendbaren Kubernetes-Labors auf Proxmox. Das Ziel ist ein hochverfügbares Kubernetes-Cluster, das jederzeit per Terraform und Ansible neu erstellt werden kann. Das Cluster soll als saubere Lern- und Testumgebung dienen, in der Anwendungen über Kubernetes-YAMLs deployed und später über DNS/Ingress erreichbar gemacht werden können.

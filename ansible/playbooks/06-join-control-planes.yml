@@ -1,6 +1,6 @@
 ---
 - name: Join additional control plane nodes
-  hosts: control_plane:!control-01
+  hosts: control_plane:!control_plane[0]
   become: true
   tasks:
     - name: Check if node already joined

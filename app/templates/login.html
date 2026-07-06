@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Anmelden · Cluster Builder{% endblock %}
+{% block content %}
+<section class="narrow card">
+  <h1>Anmelden</h1>
+  <p class="muted">Administrationszugang zum Cluster Builder</p>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" class="stack">
+    <label>Benutzer<input name="username" value="admin" required></label>
+    <label>Passwort<input type="password" name="password" required autofocus></label>
+    <button>Anmelden</button>
+  </form>
+</section>
+{% endblock %}
+

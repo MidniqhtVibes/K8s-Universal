@@ -1,6 +1,6 @@
 ---
 - name: Initialize first control plane
-  hosts: control-01
+  hosts: control_plane[0]
   become: true
   tasks:
     - name: Check if cluster is already initialized
@@ -14,7 +14,7 @@
         content: |
           apiVersion: kubeadm.k8s.io/v1beta4
           kind: ClusterConfiguration
-          kubernetesVersion: stable
+          kubernetesVersion: "{{ kubernetes_minor }}"
           controlPlaneEndpoint: "{{ control_plane_endpoint }}"
           networking:
             podSubnet: "{{ pod_cidr }}"

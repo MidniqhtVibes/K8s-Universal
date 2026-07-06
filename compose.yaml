@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: clusterbuilder
+      POSTGRES_USER: clusterbuilder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clusterbuilder -d clusterbuilder"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  web:
+    build: .
+    env_file: ${BUILDER_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql+psycopg://clusterbuilder:${POSTGRES_PASSWORD}@postgres/clusterbuilder
+      DATA_ROOT: /data
+      SOURCE_ROOT: /iac
+    volumes:
+      - cluster-data:/data
+      - ./:/iac:ro
+    ports:
+      - "${BUILDER_BIND_ADDRESS:-127.0.0.1}:${BUILDER_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    env_file: ${BUILDER_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql+psycopg://clusterbuilder:${POSTGRES_PASSWORD}@postgres/clusterbuilder
+      DATA_ROOT: /data
+      SOURCE_ROOT: /iac
+    volumes:
+      - cluster-data:/data
+      - ./:/iac:ro
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  cluster-data:

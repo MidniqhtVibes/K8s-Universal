@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><div><h1>Cluster</h1><p class="muted">Gewünschte und aktuelle Infrastrukturzustände</p></div><a class="button" href="/clusters/new">Neuen Cluster konfigurieren</a></div>
+<div class="grid cards">
+{% for cluster in clusters %}
+  <a class="card cluster-card" href="/clusters/{{ cluster.id }}"><div class="row"><h2>{{ cluster.name }}</h2><span class="badge {{ cluster.status.value }}">{{ cluster.status.value }}</span></div><p>{{ cluster.config.nodes|length }} VMs · {{ cluster.config.proxmox.node }} · {{ cluster.config.network.cidr }}</p><small>Aktualisiert {{ cluster.updated_at.strftime('%d.%m.%Y %H:%M') }}</small></a>
+{% else %}
+  <div class="card empty"><h2>Noch kein Cluster</h2><p>Lege Credentials an und starte danach den Assistenten.</p><a href="/credentials">Credentials verwalten</a></div>
+{% endfor %}
+</div>
+{% endblock %}
+

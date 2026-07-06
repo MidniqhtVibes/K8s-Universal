@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}Cluster Builder{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">Cluster Builder</a>
+    {% if request.session.get('user_id') %}
+    <nav><a href="/">Cluster</a><a href="/credentials">Credentials</a><form action="/logout" method="post"><button class="link">Abmelden</button></form></nav>
+    {% endif %}
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  {% if request.session.get('user_id') and request.url.scheme != 'https' %}<div class="http-warning">HTTP aktiv: Zugangsdaten nur in einem vertrauenswürdigen internen Netz eingeben.</div>{% endif %}
+  {% block scripts %}{% endblock %}
+</body>
+</html>

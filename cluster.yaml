@@ -1,41 +1,44 @@
-cluster:
-  name: k8s-ha-lab
-  kubernetes_minor: "v1.36"
-  pod_cidr: "192.168.0.0/16"
-  service_cidr: "10.96.0.0/12"
-  cni: calico
+schema_version: 1
+id: 00000000-0000-0000-0000-000000000001
+name: k8s-ha-lab
 
 proxmox:
-  host: 10.200.50.134
+  endpoint: https://10.200.50.134:8006/
+  node: pve
+  datastore: local-lvm
+  template_vm_id: 9000
+  bridge: vmbr0
+  vlan_id: null
+  verify_tls: false
+  credential_ref: credential://replace-in-web-ui
 
 network:
-  subnet_cidr: 24
+  cidr: 10.200.50.0/24
   gateway: 10.200.50.1
-  dns:
-    - 10.200.50.1
-    - 1.1.1.1
+  dns_servers: [10.200.50.1, 1.1.1.1]
+  api_vip: 10.200.50.150
 
-api:
-  vip: 10.200.50.150
-  port: 6443
+ssh:
+  user: ubuntu
+  port: 22
+  public_key: ssh-ed25519 AAAA_REPLACE_IN_WEB_UI
+  credential_ref: credential://replace-in-web-ui
+
+kubernetes:
+  version: v1.36
+  api_port: 6443
+  pod_cidr: 192.168.0.0/16
+  service_cidr: 10.96.0.0/12
 
 nodes:
-  loadbalancer:
-    - name: lb-01
-      ip: 10.200.50.145
-    - name: lb-02
-      ip: 10.200.50.146
+  - {name: lb-01, role: loadbalancer, vm_id: 301, ip: 10.200.50.145, cores: 1, memory_mb: 1024, disk_gb: 20}
+  - {name: lb-02, role: loadbalancer, vm_id: 302, ip: 10.200.50.146, cores: 1, memory_mb: 1024, disk_gb: 20}
+  - {name: control-01, role: control_plane, vm_id: 311, ip: 10.200.50.151, cores: 2, memory_mb: 4096, disk_gb: 40}
+  - {name: control-02, role: control_plane, vm_id: 312, ip: 10.200.50.152, cores: 2, memory_mb: 4096, disk_gb: 40}
+  - {name: control-03, role: control_plane, vm_id: 313, ip: 10.200.50.153, cores: 2, memory_mb: 4096, disk_gb: 40}
+  - {name: worker-01, role: worker, vm_id: 321, ip: 10.200.50.161, cores: 2, memory_mb: 4096, disk_gb: 50}
+  - {name: worker-02, role: worker, vm_id: 322, ip: 10.200.50.162, cores: 2, memory_mb: 4096, disk_gb: 50}
 
-  control_plane:
-    - name: control-01
-      ip: 10.200.50.151
-    - name: control-02
-      ip: 10.200.50.152
-    - name: control-03
-      ip: 10.200.50.153
-
-  worker:
-    - name: worker-01
-      ip: 10.200.50.161
-    - name: worker-02
-      ip: 10.200.50.162
+addons:
+  cni: {provider: calico, version: v3.32.0}
+  ingress: {enabled: true, provider: traefik, replicas: 2, http_node_port: 30080, https_node_port: 30443}

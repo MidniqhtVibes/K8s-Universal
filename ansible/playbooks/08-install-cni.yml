@@ -1,6 +1,6 @@
 ---
 - name: Install Calico CNI
-  hosts: control-01
+  hosts: control_plane[0]
   become: true
   tasks:
     - name: Check if Calico namespace exists
@@ -10,11 +10,11 @@
       changed_when: false
 
     - name: Install Calico CRDs
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/v1_crd_projectcalico_org.yaml
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf create -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/v1_crd_projectcalico_org.yaml
       when: calico_ns.rc != 0
 
     - name: Install Tigera operator
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf create -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.0/manifests/tigera-operator.yaml
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf create -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
       when: calico_ns.rc != 0
 
     - name: Create Calico custom resources

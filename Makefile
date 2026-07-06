@@ -1,72 +1,47 @@
-.PHONY: init plan infra ping k8s check test cluster destroy clean
+.PHONY: builder-up builder-down builder-logs builder-test render init plan infra ping k8s check destroy clean
 
-init:
-	cd terraform && terraform init
+CONFIG ?= cluster.yaml
+RUNTIME ?= .runtime
+PYTHON ?= python3
 
-plan:
-	cd terraform && terraform plan
+builder-up:
+	docker compose up --build -d
+
+builder-down:
+	docker compose down
+
+builder-logs:
+	docker compose logs -f web worker
+
+builder-test:
+	docker compose run --rm --no-deps web pytest -q
+
+render:
+	$(PYTHON) -m app.cli render --config $(CONFIG) --output $(RUNTIME) --source .
+
+init: render
+	cd $(RUNTIME)/terraform && terraform init -input=false
+
+plan: render
+	cd $(RUNTIME)/terraform && terraform plan -input=false -out=tfplan
 
 infra:
-	cd terraform && terraform apply -parallelism=4
+	cd $(RUNTIME)/terraform && terraform apply -input=false tfplan
 
 ping:
-	cd ansible && ansible -i inventory.ini all -m ping
+	cd $(RUNTIME)/ansible && ansible -i inventory.generated.yml all -m ping
 
 k8s:
-	cd ansible && ansible-playbook -i inventory.ini site.yml
+	cd $(RUNTIME)/ansible && ansible-playbook -i inventory.generated.yml site.yml
 
 check:
-	KUBECONFIG=$(PWD)/kubeconfig ./scripts/check-cluster.sh
-
-test:
-	KUBECONFIG=$(PWD)/kubeconfig kubectl apply -f kube/test/nginx.yaml
-	KUBECONFIG=$(PWD)/kubeconfig kubectl get pods -o wide
-	KUBECONFIG=$(PWD)/kubeconfig kubectl get svc
-
-wait:
-	./scripts/wait-for-ssh.sh
-
-preflight:
-	./scripts/preflight.sh
-
-clean-ssh:
-	for ip in 10.200.50.145 10.200.50.146 10.200.50.151 10.200.50.152 10.200.50.153 10.200.50.161 10.200.50.162; do \
-		ssh-keygen -f "$$HOME/.ssh/known_hosts" -R "$$ip"; \
-	done
-
-cluster: preflight infra wait clean-ssh ping k8s check
-
-lab: cluster ingress
-
-demo: lab demo-ingress
+	kubectl --kubeconfig $(RUNTIME)/kubeconfig get nodes -o wide
+	kubectl --kubeconfig $(RUNTIME)/kubeconfig get pods -A
+	kubectl --kubeconfig $(RUNTIME)/kubeconfig get --raw='/readyz?verbose'
 
 destroy:
-	cd terraform && terraform destroy
+	cd $(RUNTIME)/terraform && terraform plan -destroy -input=false -out=destroy.tfplan
+	@echo "Destroy-Plan erzeugt. Explizit mit 'terraform apply $(RUNTIME)/terraform/destroy.tfplan' bestätigen."
 
 clean:
-	rm -f kubeconfig
-
-ingress:
-	helm repo add traefik https://traefik.github.io/charts || true
-	helm repo update
-	KUBECONFIG=$(PWD)/kubeconfig helm upgrade --install traefik traefik/traefik \
-		--namespace traefik \
-		--create-namespace \
-		-f kube/addons/traefik/values.yaml
-	cd ansible && ansible-playbook -i inventory.ini playbooks/02-loadbalancer.yml
-
-demo-ingress:
-	KUBECONFIG=$(PWD)/kubeconfig kubectl apply -f kube/demo/nginx-ingress/namespace.yaml
-	KUBECONFIG=$(PWD)/kubeconfig kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/demo --timeout=30s
-	KUBECONFIG=$(PWD)/kubeconfig kubectl apply -f kube/demo/nginx-ingress/service.yaml
-	KUBECONFIG=$(PWD)/kubeconfig kubectl apply -f kube/demo/nginx-ingress/deployment.yaml
-	KUBECONFIG=$(PWD)/kubeconfig kubectl apply -f kube/demo/nginx-ingress/ingress.yaml
-
-delete-demo-ingress:
-	KUBECONFIG=$(PWD)/kubeconfig kubectl delete -f kube/demo/nginx-ingress/ingress.yaml --ignore-not-found
-	KUBECONFIG=$(PWD)/kubeconfig kubectl delete -f kube/demo/nginx-ingress/deployment.yaml --ignore-not-found
-	KUBECONFIG=$(PWD)/kubeconfig kubectl delete -f kube/demo/nginx-ingress/service.yaml --ignore-not-found
-	KUBECONFIG=$(PWD)/kubeconfig kubectl delete -f kube/demo/nginx-ingress/namespace.yaml --ignore-not-found
-
-tools:
-	./scripts/install-local-tools.sh
+	rm -rf $(RUNTIME)

@@ -1,22 +1,2 @@
-kubernetes_minor: "v1.36"
-
-api_vip: "10.200.50.150"
-api_port: 6443
-
-pod_cidr: "192.168.0.0/16"
-service_cidr: "10.96.0.0/12"
-
-control_plane_endpoint: "10.200.50.150:6443"
-
-first_control_plane: "control-01"
-
-kube_user: "ubuntu"
-keepalived_interface: "eth0"
-
-haproxy_backends:
-  - name: control-01
-    ip: 10.200.50.151
-  - name: control-02
-    ip: 10.200.50.152
-  - name: control-03
-    ip: 10.200.50.153
+---
+# Generated per cluster by app.generator. No environment-specific defaults live here.

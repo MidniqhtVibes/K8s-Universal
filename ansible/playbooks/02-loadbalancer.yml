@@ -35,7 +35,7 @@
               timeout server  50s
 
           frontend kubernetes_api
-              bind *:6443
+              bind *:{{ api_port }}
               mode tcp
               default_backend kubernetes_control_plane
 
@@ -44,7 +44,7 @@
               balance roundrobin
               option tcp-check
           {% for backend in haproxy_backends %}
-              server {{ backend.name }} {{ backend.ip }}:6443 check
+              server {{ backend.name }} {{ backend.ip }}:{{ api_port }} check
           {% endfor %}
 
           frontend http_ingress
@@ -56,8 +56,9 @@
               mode tcp
               balance roundrobin
               option tcp-check
-              server worker-01 10.200.50.161:30080 check
-              server worker-02 10.200.50.162:30080 check
+          {% for backend in haproxy_workers %}
+              server {{ backend.name }} {{ backend.ip }}:{{ ingress_http_node_port }} check
+          {% endfor %}
 
           frontend https_ingress
               bind *:443
@@ -68,17 +69,18 @@
               mode tcp
               balance roundrobin
               option tcp-check
-              server worker-01 10.200.50.161:30443 check
-              server worker-02 10.200.50.162:30443 check
+          {% for backend in haproxy_workers %}
+              server {{ backend.name }} {{ backend.ip }}:{{ ingress_https_node_port }} check
+          {% endfor %}
       notify: Restart HAProxy
 
     - name: Set keepalived state
       ansible.builtin.set_fact:
-        keepalived_state: "{{ 'MASTER' if inventory_hostname == 'lb-01' else 'BACKUP' }}"
+        keepalived_state: "{{ 'MASTER' if inventory_hostname == keepalived_master else 'BACKUP' }}"
 
     - name: Set keepalived priority
       ansible.builtin.set_fact:
-        keepalived_priority: "{{ 110 if inventory_hostname == 'lb-01' else 100 }}"
+        keepalived_priority: "{{ 110 - (groups['loadbalancer'].index(inventory_hostname) * 10) }}"
 
     - name: Configure Keepalived
       ansible.builtin.copy:
@@ -102,11 +104,11 @@
 
               authentication {
                   auth_type PASS
-                  auth_pass k8ssec01
+              auth_pass {{ lookup('env', 'KEEPALIVED_AUTH_PASS') }}
               }
 
               virtual_ipaddress {
-                  {{ api_vip }}/24
+              {{ api_vip }}/{{ api_prefix }}
               }
 
               track_script {
