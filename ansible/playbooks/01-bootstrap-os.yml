@@ -2,12 +2,64 @@
 - name: Bootstrap operating system
   hosts: all
   become: true
+  any_errors_fatal: true
   tasks:
     - name: Wait for cloud-init to finish
-      ansible.builtin.command: timeout 600 cloud-init status --wait --long
+      ansible.builtin.command: timeout 1200 cloud-init status --wait --long
       register: cloud_init_status
       changed_when: false
-      failed_when: >-
+      failed_when: false
+
+    - name: Collect cloud-init output log on failure
+      ansible.builtin.command:
+        argv:
+          - tail
+          - -n
+          - "160"
+          - /var/log/cloud-init-output.log
+      register: cloud_init_output_log
+      changed_when: false
+      failed_when: false
+      when: >-
+        cloud_init_status.rc not in [0, 2]
+        or 'status: done' not in cloud_init_status.stdout
+        or 'errors: []' not in cloud_init_status.stdout
+
+    - name: Collect cloud-init debug log on failure
+      ansible.builtin.command:
+        argv:
+          - tail
+          - -n
+          - "160"
+          - /var/log/cloud-init.log
+      register: cloud_init_debug_log
+      changed_when: false
+      failed_when: false
+      when: >-
+        cloud_init_status.rc not in [0, 2]
+        or 'status: done' not in cloud_init_status.stdout
+        or 'errors: []' not in cloud_init_status.stdout
+
+    - name: Fail if cloud-init did not finish cleanly
+      ansible.builtin.fail:
+        msg: |
+          cloud-init did not finish cleanly on {{ inventory_hostname }}.
+
+          cloud-init rc:
+          {{ cloud_init_status.rc }}
+
+          cloud-init stdout:
+          {{ cloud_init_status.stdout }}
+
+          cloud-init stderr:
+          {{ cloud_init_status.stderr }}
+
+          /var/log/cloud-init-output.log:
+          {{ cloud_init_output_log.stdout | default('not collected') }}
+
+          /var/log/cloud-init.log:
+          {{ cloud_init_debug_log.stdout | default('not collected') }}
+      when: >-
         cloud_init_status.rc not in [0, 2]
         or 'status: done' not in cloud_init_status.stdout
         or 'errors: []' not in cloud_init_status.stdout

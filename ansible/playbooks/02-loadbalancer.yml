@@ -2,6 +2,7 @@
 - name: Configure HAProxy and Keepalived
   hosts: loadbalancer
   become: true
+  any_errors_fatal: true
 
   tasks:
     - name: Install HAProxy and Keepalived
@@ -176,7 +177,7 @@
     - name: Wait until one load balancer owns the API VIP
       ansible.builtin.assert:
         that:
-          - groups['loadbalancer'] | map('extract', hostvars, 'keepalived_vip_check') | map(attribute='stdout') | map('trim') | reject('equalto', '') | list | length == 1
+          - groups['loadbalancer'] | map('extract', hostvars, 'keepalived_vip_check') | select('defined') | map(attribute='stdout') | map('trim') | reject('equalto', '') | list | length == 1
         fail_msg: >-
           Keepalived did not assign API VIP {{ api_vip }} to exactly one load balancer.
           Check keepalived status, VRRP/firewall rules, interface selection and KEEPALIVED_AUTH_PASS.
