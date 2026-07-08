@@ -35,9 +35,13 @@
         <button class="danger full">Anwendung löschen</button>
       </form>
     </div>
-    <hr><h3>Revisionen</h3><div class="revision-list">{% for revision in revisions %}<div class="revision"><div><strong>v{{ revision.version }}</strong>{% if revision.applied_at %}<span class="badge ready">applied</span>{% endif %}<small>{{ revision.created_at.strftime('%d.%m. %H:%M') }}</small></div><p>{{ revision.message }}</p><form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/revisions/{{ revision.id }}/restore" onsubmit="return confirm('Revision {{ revision.version }} als neuen Entwurf wiederherstellen?')"><button class="link-button">Wiederherstellen</button></form></div>{% endfor %}</div>
   </aside>
 </div>
+
+<section class="card">
+  <h2>Revisionen</h2>
+  <div class="revision-list">{% for revision in revisions %}<div class="revision"><div><strong>v{{ revision.version }}</strong>{% if revision.applied_at %}<span class="badge ready">applied</span>{% endif %}<small>{{ revision.created_at.strftime('%d.%m. %H:%M') }}</small></div><p>{{ revision.message }}</p><form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/revisions/{{ revision.id }}/restore" onsubmit="return confirm('Revision {{ revision.version }} als neuen Entwurf wiederherstellen?')"><button class="link-button">Wiederherstellen</button></form></div>{% else %}<p class="muted">Noch keine Revisionen vorhanden.</p>{% endfor %}</div>
+</section>
 
 <section class="card"><h2>Manifest-Jobs</h2>{% for job in jobs %}<details {% if loop.first %}open{% endif %} data-job-id="{{ job.id }}" data-status="{{ job.status.value }}"><summary><span>{{ job.kind.value }}</span><span class="badge {{ job.status.value }} job-status">{{ job.status.value }}</span><small>{{ job.created_at.strftime('%d.%m.%Y %H:%M') }}</small>{% if job.status.value in ['queued','running'] %}<form method="post" action="/jobs/{{ job.id }}/cancel"><button class="secondary">Abbrechen</button></form>{% endif %}</summary><pre class="job-log">{{ job.log or 'Wartet auf Worker …' }}</pre>{% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}</details>{% else %}<p class="muted">Noch keine Validierung oder Bereitstellung ausgeführt.</p>{% endfor %}</section>
 {% endblock %}

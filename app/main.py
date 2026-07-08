@@ -112,6 +112,25 @@ def credentials_page(request: Request, _: User = Depends(current_user), db: Sess
     return templates.TemplateResponse(request, "credentials.html", {"credentials": credentials})
 
 
+@app.post("/credentials/{credential_id}/delete")
+def delete_credential(credential_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    credential = db.get(Credential, credential_id)
+    if not credential:
+        raise HTTPException(404)
+    reference = f"credential://{credential.id}"
+    referencing_clusters = []
+    for cluster in db.scalars(select(Cluster).order_by(Cluster.name)).all():
+        config = cluster.config or {}
+        if config.get("proxmox", {}).get("credential_ref") == reference or config.get("ssh", {}).get("credential_ref") == reference:
+            referencing_clusters.append(cluster.name)
+    if referencing_clusters:
+        return RedirectResponse("/credentials?error=used", status_code=303)
+    db.add(AuditEvent(action="delete_credential", object_type="credential", object_id=credential.id, details={"name": credential.name, "kind": credential.kind.value}))
+    db.delete(credential)
+    db.commit()
+    return RedirectResponse("/credentials?deleted=1", status_code=303)
+
+
 @app.post("/credentials/proxmox")
 def create_proxmox_credential(
     name: str = Form(), endpoint: str = Form(), api_token: str = Form(), verify_tls: bool = Form(False),
