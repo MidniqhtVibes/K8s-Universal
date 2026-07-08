@@ -21,6 +21,8 @@ Ersetze in `.env` alle Beispielwerte durch unabhängige lange Zufallswerte. Beso
 
 Die Anwendung bindet standardmäßig nur an `127.0.0.1:8000`. Für Zugriff aus dem internen Netz muss `BUILDER_BIND_ADDRESS` bewusst auf die private IP der Orchestrator-VM gesetzt werden. Da Version 1 HTTP verwendet, darf der Dienst nicht in ein öffentliches oder nicht vertrauenswürdiges Netz exponiert werden.
 
+`TERRAFORM_PARALLELISM` begrenzt parallele Terraform-Aktionen gegen Proxmox. Der Standard ist `4`. Wenn Proxmox bei vielen VMs mit `HTTP 596 Broken pipe` oder hängenden Start-/Clone-Tasks reagiert, setze den Wert testweise auf `2` oder `3`.
+
 ```bash
 docker compose up --build -d
 docker compose logs -f web worker

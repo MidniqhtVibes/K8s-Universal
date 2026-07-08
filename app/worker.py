@@ -33,6 +33,10 @@ class JobCancelled(RuntimeError):
     pass
 
 
+def terraform_parallelism_arg() -> str:
+    return f"-parallelism={settings.terraform_parallelism}"
+
+
 def ensure_not_cancelled(job_id: str) -> None:
     with SessionLocal() as db:
         job = db.get(Job, job_id)
@@ -254,7 +258,7 @@ def execute(job_id: str) -> None:
             run_command(job, ["terraform", "init", "-input=false"], terraform_dir, env, secrets)
             run_command(job, ["terraform", "validate"], terraform_dir, env, secrets)
             plan_name = "destroy.tfplan" if job.kind == JobKind.DESTROY_PLAN else "tfplan"
-            command = ["terraform", "plan", "-input=false", "-out", plan_name]
+            command = ["terraform", "plan", "-input=false", terraform_parallelism_arg(), "-out", plan_name]
             if job.kind == JobKind.DESTROY_PLAN:
                 command.extend(["-destroy", "-refresh=false"])
             run_command(job, command, terraform_dir, env, secrets)
@@ -276,7 +280,7 @@ def execute(job_id: str) -> None:
                 if cluster:
                     cluster.status = ClusterStatus.APPLYING
                     db.commit()
-            run_command(job, ["terraform", "apply", "-input=false", "tfplan"], terraform_dir, env, secrets)
+            run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "tfplan"], terraform_dir, env, secrets)
             wait_for_ssh(job, config)
             run_command(job, ["ansible-playbook", "-i", "inventory.generated.yml", "site.yml"], ansible_dir, env, secrets)
             if config.addons.ingress.enabled:
@@ -297,7 +301,7 @@ def execute(job_id: str) -> None:
             return
 
         if job.kind == JobKind.DESTROY:
-            run_command(job, ["terraform", "apply", "-input=false", "destroy.tfplan"], terraform_dir, env, secrets)
+            run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "destroy.tfplan"], terraform_dir, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
