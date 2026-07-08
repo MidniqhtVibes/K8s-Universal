@@ -154,7 +154,7 @@
           - "{{ api_vip }}"
       register: keepalived_master_vip_check
       changed_when: false
-      until: keepalived_master_vip_check.rc == 0
+      until: keepalived_master_vip_check.stdout | trim | length > 0
       retries: 12
       delay: 5
       when: inventory_hostname == keepalived_master
@@ -175,7 +175,7 @@
     - name: Wait until one load balancer owns the API VIP
       ansible.builtin.assert:
         that:
-          - groups['loadbalancer'] | map('extract', hostvars, 'keepalived_vip_check') | selectattr('rc', 'equalto', 0) | list | length == 1
+          - groups['loadbalancer'] | map('extract', hostvars, 'keepalived_vip_check') | map(attribute='stdout') | map('trim') | reject('equalto', '') | list | length == 1
         fail_msg: >-
           Keepalived did not assign API VIP {{ api_vip }} to exactly one load balancer.
           Check keepalived status, VRRP/firewall rules, interface selection and KEEPALIVED_AUTH_PASS.

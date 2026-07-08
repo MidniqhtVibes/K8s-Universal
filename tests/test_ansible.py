@@ -56,5 +56,6 @@ def test_loadbalancer_waits_for_vip_before_control_plane_bootstrap():
     assert "update_cache_retries: 5" in loadbalancer_playbook
     assert "Apply pending load balancer service restarts" in loadbalancer_playbook
     assert "Wait for Keepalived master to own the API VIP" in loadbalancer_playbook
-    assert "groups['loadbalancer'] | map('extract', hostvars, 'keepalived_vip_check')" in loadbalancer_playbook
+    assert "keepalived_master_vip_check.stdout | trim | length > 0" in loadbalancer_playbook
+    assert "map(attribute='stdout') | map('trim') | reject('equalto', '')" in loadbalancer_playbook
     assert "Wait for Kubernetes API TCP port through VIP" in init_playbook
