@@ -11,6 +11,7 @@
           - keepalived
         state: present
         update_cache: true
+        cache_valid_time: 3600
         lock_timeout: 600
         update_cache_retries: 5
         update_cache_retry_max_delay: 30

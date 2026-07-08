@@ -54,6 +54,7 @@ def test_loadbalancer_waits_for_vip_before_control_plane_bootstrap():
     loadbalancer_playbook = (project / "ansible/playbooks/02-loadbalancer.yml").read_text(encoding="utf-8")
     init_playbook = (project / "ansible/playbooks/05-init-control-plane.yml").read_text(encoding="utf-8")
     assert "update_cache_retries: 5" in loadbalancer_playbook
+    assert "cache_valid_time: 3600" in loadbalancer_playbook
     assert "Apply pending load balancer service restarts" in loadbalancer_playbook
     assert "Wait for Keepalived master to own the API VIP" in loadbalancer_playbook
     assert "keepalived_master_vip_check.stdout | trim | length > 0" in loadbalancer_playbook

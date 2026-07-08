@@ -15,3 +15,10 @@ def test_terraform_commands_limit_parallelism():
     assert "terraform_parallelism_arg()" in worker
     assert '["terraform", "apply", "-input=false", terraform_parallelism_arg(), "tfplan"]' in worker
     assert '["terraform", "apply", "-input=false", terraform_parallelism_arg(), "destroy.tfplan"]' in worker
+
+
+def test_apply_recreates_current_tfplan_before_applying():
+    worker = (Path(__file__).parents[1] / "app/worker.py").read_text(encoding="utf-8")
+    assert "def create_terraform_plan(" in worker
+    assert "Terraform-Plan wird fuer den aktuellen Apply neu erzeugt" in worker
+    assert "create_terraform_plan(job, terraform_dir, env, secrets)\n            with SessionLocal() as db:" in worker

@@ -216,6 +216,15 @@ def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace:
     append_log(job.id, "Proxmox-Prüfung erfolgreich.\n")
 
 
+def create_terraform_plan(job: Job, terraform_dir: Path, env: dict[str, str], secrets: list[str], plan_name: str = "tfplan", destroy: bool = False) -> None:
+    run_command(job, ["terraform", "init", "-input=false"], terraform_dir, env, secrets)
+    run_command(job, ["terraform", "validate"], terraform_dir, env, secrets)
+    command = ["terraform", "plan", "-input=false", terraform_parallelism_arg(), "-out", plan_name]
+    if destroy:
+        command.extend(["-destroy", "-refresh=false"])
+    run_command(job, command, terraform_dir, env, secrets)
+
+
 def execute(job_id: str) -> None:
     with SessionLocal() as db:
         job = db.get(Job, job_id)
@@ -255,13 +264,8 @@ def execute(job_id: str) -> None:
         if job.kind in (JobKind.PLAN, JobKind.DESTROY_PLAN):
             if job.kind == JobKind.PLAN:
                 validate_proxmox(job, config, token, workspace)
-            run_command(job, ["terraform", "init", "-input=false"], terraform_dir, env, secrets)
-            run_command(job, ["terraform", "validate"], terraform_dir, env, secrets)
             plan_name = "destroy.tfplan" if job.kind == JobKind.DESTROY_PLAN else "tfplan"
-            command = ["terraform", "plan", "-input=false", terraform_parallelism_arg(), "-out", plan_name]
-            if job.kind == JobKind.DESTROY_PLAN:
-                command.extend(["-destroy", "-refresh=false"])
-            run_command(job, command, terraform_dir, env, secrets)
+            create_terraform_plan(job, terraform_dir, env, secrets, plan_name, job.kind == JobKind.DESTROY_PLAN)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
@@ -275,6 +279,8 @@ def execute(job_id: str) -> None:
 
         if job.kind == JobKind.APPLY:
             validate_proxmox(job, config, token, workspace)
+            append_log(job.id, "Terraform-Plan wird fuer den aktuellen Apply neu erzeugt, damit Wiederholungen nach Teilfehlern oder Worker-Neustarts stabil sind.\n")
+            create_terraform_plan(job, terraform_dir, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
