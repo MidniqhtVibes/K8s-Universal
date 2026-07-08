@@ -42,7 +42,5 @@
     {% endif %}
     <main>{% block content %}{% endblock %}</main>
   </div>
-  {% if request.session.get('user_id') and request.url.scheme != 'https' %}<div class="http-warning">HTTP aktiv: Zugangsdaten nur in einem vertrauenswürdigen internen Netz eingeben.</div>{% endif %}
-  {% block scripts %}{% endblock %}
 </body>
 </html>
