@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import queue
 import signal
@@ -140,9 +141,43 @@ def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
         raise RuntimeError(f"SSH-Timeout für: {', '.join(sorted(pending))}")
 
 
+def managed_vm_ids_from_state(terraform_dir: Path) -> set[int]:
+    state_file = terraform_dir / "terraform.tfstate"
+    if not state_file.is_file():
+        return set()
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    ids: set[int] = set()
+    for resource in state.get("resources", []):
+        if resource.get("type") != "proxmox_virtual_environment_vm":
+            continue
+        for instance in resource.get("instances", []):
+            vm_id = instance.get("attributes", {}).get("vm_id")
+            if vm_id is not None:
+                ids.add(int(vm_id))
+    return ids
+
+
+def conflicting_storage_volumes(storage_content: object, vm_ids: set[int]) -> dict[int, list[str]]:
+    conflicts: dict[int, list[str]] = {vm_id: [] for vm_id in vm_ids}
+    if not isinstance(storage_content, list):
+        return {}
+    for item in storage_content:
+        if not isinstance(item, dict):
+            continue
+        volume = str(item.get("volid") or item.get("name") or "")
+        for vm_id in vm_ids:
+            if f"vm-{vm_id}-cloudinit" in volume or f"vm-{vm_id}-disk-" in volume:
+                conflicts[vm_id].append(volume)
+    return {vm_id: volumes for vm_id, volumes in conflicts.items() if volumes}
+
+
 def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace: Path) -> None:
     append_log(job.id, "Proxmox-Ressourcen und Konflikte werden geprüft …\n")
-    discovery = ProxmoxClient(config.proxmox.endpoint, api_token, config.proxmox.verify_tls).discover()
+    client = ProxmoxClient(config.proxmox.endpoint, api_token, config.proxmox.verify_tls)
+    discovery = client.discover()
     node_names = {item.get("node") for item in discovery.get("nodes", [])}
     if config.proxmox.node not in node_names:
         raise RuntimeError(f"Proxmox-Node {config.proxmox.node} ist nicht verfügbar")
@@ -157,11 +192,23 @@ def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace:
     templates = {int(item["vmid"]) for item in resources if item.get("template") == 1 and item.get("vmid") is not None}
     if config.proxmox.template_vm_id not in templates:
         raise RuntimeError(f"Template-VM {config.proxmox.template_vm_id} wurde nicht gefunden")
-    if not (workspace / "terraform" / "terraform.tfstate").exists():
-        used_ids = {int(item["vmid"]) for item in resources if item.get("vmid") is not None}
-        collisions = sorted({node.vm_id for node in config.nodes} & used_ids)
-        if collisions:
-            raise RuntimeError(f"VM-IDs sind bereits belegt: {', '.join(map(str, collisions))}")
+    requested_ids = {node.vm_id for node in config.nodes}
+    managed_ids = managed_vm_ids_from_state(workspace / "terraform")
+    unmanaged_ids = requested_ids - managed_ids
+    used_ids = {int(item["vmid"]) for item in resources if item.get("vmid") is not None}
+    collisions = sorted(unmanaged_ids & used_ids)
+    if collisions:
+        raise RuntimeError(f"VM-IDs sind bereits in Proxmox belegt: {', '.join(map(str, collisions))}")
+    if unmanaged_ids:
+        storage_content = client.get(f"nodes/{config.proxmox.node}/storage/{config.proxmox.datastore}/content")
+        volume_conflicts = conflicting_storage_volumes(storage_content, unmanaged_ids)
+        if volume_conflicts:
+            details = "; ".join(f"{vm_id}: {', '.join(volumes)}" for vm_id, volumes in sorted(volume_conflicts.items()))
+            raise RuntimeError(
+                "Proxmox-Storage enthält bereits Volumes für geplante VM-IDs. "
+                "Das passiert typischerweise nach abgebrochenen oder halb gelöschten VMs. "
+                f"Bitte bereinigen oder andere VM-IDs wählen: {details}"
+            )
     append_log(job.id, "Proxmox-Prüfung erfolgreich.\n")
 
 
@@ -202,13 +249,14 @@ def execute(job_id: str) -> None:
         env["CLUSTER_KUBECONFIG_DEST"] = str(kubeconfig)
 
         if job.kind in (JobKind.PLAN, JobKind.DESTROY_PLAN):
-            validate_proxmox(job, config, token, workspace)
+            if job.kind == JobKind.PLAN:
+                validate_proxmox(job, config, token, workspace)
             run_command(job, ["terraform", "init", "-input=false"], terraform_dir, env, secrets)
             run_command(job, ["terraform", "validate"], terraform_dir, env, secrets)
             plan_name = "destroy.tfplan" if job.kind == JobKind.DESTROY_PLAN else "tfplan"
             command = ["terraform", "plan", "-input=false", "-out", plan_name]
             if job.kind == JobKind.DESTROY_PLAN:
-                command.append("-destroy")
+                command.extend(["-destroy", "-refresh=false"])
             run_command(job, command, terraform_dir, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
@@ -222,6 +270,7 @@ def execute(job_id: str) -> None:
             return
 
         if job.kind == JobKind.APPLY:
+            validate_proxmox(job, config, token, workspace)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
