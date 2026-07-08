@@ -8,7 +8,7 @@
         argv:
           - kubectl
           - --kubeconfig
-          - /etc/kubernetes/admin.conf
+          - /root/admin-local.conf
           - apply
           - --server-side
           - --force-conflicts
@@ -22,7 +22,7 @@
         argv:
           - kubectl
           - --kubeconfig
-          - /etc/kubernetes/admin.conf
+          - /root/admin-local.conf
           - wait
           - --for=condition=Established
           - crd/installations.operator.tigera.io
@@ -35,7 +35,7 @@
         argv:
           - kubectl
           - --kubeconfig
-          - /etc/kubernetes/admin.conf
+          - /root/admin-local.conf
           - apply
           - --server-side
           - --force-conflicts
@@ -49,7 +49,7 @@
         argv:
           - kubectl
           - --kubeconfig
-          - /etc/kubernetes/admin.conf
+          - /root/admin-local.conf
           - -n
           - tigera-operator
           - rollout
@@ -87,7 +87,7 @@
         argv:
           - kubectl
           - --kubeconfig
-          - /etc/kubernetes/admin.conf
+          - /root/admin-local.conf
           - apply
           - --server-side
           - --force-conflicts
@@ -101,7 +101,7 @@
         argv:
           - kubectl
           - --kubeconfig
-          - /etc/kubernetes/admin.conf
+          - /root/admin-local.conf
           - wait
           - --for=condition=Ready
           - nodes
@@ -114,7 +114,7 @@
         argv:
           - kubectl
           - --kubeconfig
-          - /etc/kubernetes/admin.conf
+          - /root/admin-local.conf
           - -n
           - kube-system
           - rollout
@@ -129,7 +129,7 @@
             argv:
               - kubectl
               - --kubeconfig
-              - /etc/kubernetes/admin.conf
+              - /root/admin-local.conf
               - -n
               - kube-system
               - rollout
@@ -144,7 +144,7 @@
             argv:
               - kubectl
               - --kubeconfig
-              - /etc/kubernetes/admin.conf
+              - /root/admin-local.conf
               - -n
               - kube-system
               - get
@@ -160,7 +160,7 @@
             argv:
               - kubectl
               - --kubeconfig
-              - /etc/kubernetes/admin.conf
+              - /root/admin-local.conf
               - -n
               - kube-system
               - describe
@@ -174,7 +174,7 @@
             argv:
               - kubectl
               - --kubeconfig
-              - /etc/kubernetes/admin.conf
+              - /root/admin-local.conf
               - -n
               - kube-system
               - get
