@@ -1,8 +1,11 @@
 import copy
 import os
+import queue
+import signal
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -62,24 +65,61 @@ def run_command(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        start_new_session=True,
     )
     assert process.stdout is not None
-    for line in process.stdout:
-        append_log(job.id, line, secrets)
+    stdout_done = object()
+    output: queue.Queue[str | object] = queue.Queue()
+
+    def read_stdout() -> None:
+        try:
+            for line in process.stdout:
+                output.put(line)
+        finally:
+            output.put(stdout_done)
+
+    threading.Thread(target=read_stdout, daemon=True).start()
+    stdout_finished = False
+    while process.poll() is None or not stdout_finished:
+        try:
+            item = output.get(timeout=1)
+        except queue.Empty:
+            item = None
+        if item is stdout_done:
+            stdout_finished = True
+        elif item is None:
+            pass
+        else:
+            append_log(job.id, str(item), secrets)
+            continue
         try:
             ensure_not_cancelled(job.id)
         except JobCancelled:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+            _terminate_process(process)
             raise
     code = process.wait()
     if code not in allowed_codes:
         raise RuntimeError(f"Befehl fehlgeschlagen ({code}): {' '.join(command)}")
     return code
+
+
+def _terminate_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+        process.wait(timeout=10)
+    except ProcessLookupError:
+        return
+    except subprocess.TimeoutExpired:
+        if hasattr(os, "killpg"):
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+        process.wait(timeout=5)
 
 
 def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
@@ -315,6 +355,21 @@ def claim_job() -> str | None:
         return job.id
 
 
+def recover_interrupted_jobs() -> None:
+    with SessionLocal() as db:
+        jobs = db.scalars(select(Job).where(Job.status == JobStatus.RUNNING)).all()
+        for job in jobs:
+            job.status = JobStatus.FAILED
+            job.finished_at = datetime.now(UTC)
+            job.error = "Worker wurde während dieses Jobs neu gestartet"
+            job.log = (job.log or "") + "\nFEHLER: Worker wurde während dieses Jobs neu gestartet. Bitte den Job erneut starten.\n"
+            if job.kind not in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY, JobKind.MANIFEST_DELETE):
+                cluster = db.get(Cluster, job.cluster_id)
+                if cluster:
+                    cluster.status = ClusterStatus.FAILED
+        db.commit()
+
+
 def finish_job(job_id: str, error: Exception | None = None) -> None:
     with SessionLocal() as db:
         job = db.get(Job, job_id)
@@ -341,6 +396,7 @@ def finish_job(job_id: str, error: Exception | None = None) -> None:
 
 
 def main() -> None:
+    recover_interrupted_jobs()
     while True:
         job_id = claim_job()
         if not job_id:

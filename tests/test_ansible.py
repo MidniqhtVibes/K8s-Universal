@@ -26,6 +26,9 @@ def test_package_install_waits_for_cloud_init_and_apt_locks():
     project = Path(__file__).parents[1]
     bootstrap = (project / "ansible/playbooks/01-bootstrap-os.yml").read_text(encoding="utf-8")
     assert "cloud-init status --wait" in bootstrap
+    assert "timeout 600 cloud-init status --wait --long" in bootstrap
+    assert "async:" not in bootstrap
+    assert "poll:" not in bootstrap
     assert "cloud_init_status.rc not in [0, 2]" in bootstrap
     assert "'errors: []' not in cloud_init_status.stdout" in bootstrap
     assert "lock_timeout: 600" in bootstrap
