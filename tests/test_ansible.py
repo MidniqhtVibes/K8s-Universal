@@ -30,7 +30,10 @@ def test_package_install_waits_for_cloud_init_and_apt_locks():
     assert "00-wait-for-hosts.yml" in site
     assert "wait_for_connection" in wait
     assert "any_errors_fatal: true" in wait
-    assert "cloud-init status --wait" in bootstrap
+    assert "timeout 900 cloud-init status --wait" in wait
+    assert "timeout 900 cloud-init status --wait" in bootstrap
+    assert "async:" not in wait
+    assert "async:" not in bootstrap
     assert "cloud_init_status.rc not in [0, 2]" in bootstrap
     assert "'errors: []' not in cloud_init_status.stdout" in bootstrap
     assert "lock_timeout: 600" in bootstrap
