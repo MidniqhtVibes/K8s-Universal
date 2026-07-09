@@ -1,0 +1,24 @@
+---
+- name: Wait for hosts to become ready for Ansible
+  hosts: all
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Wait until SSH accepts Ansible connections
+      ansible.builtin.wait_for_connection:
+        timeout: 900
+        connect_timeout: 15
+        sleep: 5
+        delay: 5
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait --long
+      become: true
+      register: cloud_init_status
+      changed_when: false
+      failed_when: >-
+        cloud_init_status.rc not in [0, 2]
+        or 'status: done' not in cloud_init_status.stdout
+        or 'errors: []' not in cloud_init_status.stdout
+      async: 900
+      poll: 5

@@ -136,8 +136,6 @@ def save_cluster(db: Session, config: ClusterConfig, data_root: Path, source_roo
     render_cluster(config, data_root / "clusters" / config.id, source_root)
     db.add(AuditEvent(action="save_cluster", object_type="cluster", object_id=config.id, details={"config_hash": digest}))
     db.commit()
-    from .manifests import ensure_default_bundle
-    ensure_default_bundle(db, cluster)
     return cluster
 
 

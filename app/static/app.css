@@ -88,6 +88,7 @@ kbd { border: 1px solid #43556b; background: #182536; border-radius: 4px; paddin
 .application-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .application-card { color: inherit; text-decoration: none; transition: .15s; }
 .application-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.empty-state { border: 1px dashed var(--line); border-radius: 8px; padding: 28px; background: #0d1826; }
 .form-submit { display: flex; align-items: end; }
 .manifest-workbench { display: grid; grid-template-columns: 220px minmax(420px, 1fr) 280px; gap: 16px; align-items: start; }
 .manifest-files, .manifest-inspector { position: sticky; top: 84px; max-height: calc(100vh - 105px); overflow: auto; }

@@ -1,4 +1,5 @@
 ---
+- import_playbook: playbooks/00-wait-for-hosts.yml
 - import_playbook: playbooks/00-check.yml
 - import_playbook: playbooks/01-bootstrap-os.yml
 - import_playbook: playbooks/02-loadbalancer.yml

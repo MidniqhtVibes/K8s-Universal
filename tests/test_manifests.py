@@ -1,6 +1,6 @@
 import pytest
 
-from app.manifests import DEFAULT_NGINX_FILES, render_snapshot, validate_manifest_content, validate_manifest_path
+from app.manifests import DEFAULT_NGINX_FILES, render_application_template, render_snapshot, validate_manifest_content, validate_manifest_path
 
 
 def test_default_nginx_bundle_contains_expected_structure():
@@ -8,7 +8,18 @@ def test_default_nginx_bundle_contains_expected_structure():
     rendered, documents = render_snapshot(DEFAULT_NGINX_FILES)
     assert documents[0]["kind"] == "Namespace"
     assert {item["kind"] for item in documents} == {"Namespace", "Deployment", "Service", "Ingress"}
-    assert "nginx.lab.local" in rendered
+    assert "demo.lab.local" in rendered
+
+
+def test_application_templates_are_rendered_for_requested_name():
+    blank = render_application_template("blank", "grafana")
+    assert set(blank) == {"namespace.yaml"}
+    assert "name: grafana" in blank["namespace.yaml"]
+    demo = render_application_template("nginx-demo", "web")
+    rendered, documents = render_snapshot(demo)
+    assert "namespace: web" in rendered
+    assert "web.lab.local" in rendered
+    assert {item["kind"] for item in documents} == {"Namespace", "Deployment", "Service", "Ingress"}
 
 
 def test_plain_kubernetes_secret_is_blocked():

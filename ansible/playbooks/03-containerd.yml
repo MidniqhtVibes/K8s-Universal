@@ -2,6 +2,7 @@
 - name: Install and configure containerd
   hosts: k8s_cluster
   become: true
+  any_errors_fatal: true
   tasks:
     - name: Install containerd
       ansible.builtin.apt:

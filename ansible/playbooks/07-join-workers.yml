@@ -2,11 +2,20 @@
 - name: Join worker nodes
   hosts: worker
   become: true
+  any_errors_fatal: true
   tasks:
     - name: Check if worker already joined
       ansible.builtin.stat:
         path: /etc/kubernetes/kubelet.conf
       register: kubelet_conf
+
+    - name: Ensure worker join command exists
+      ansible.builtin.assert:
+        that:
+          - hostvars[first_control_plane].worker_join_command is defined
+          - hostvars[first_control_plane].worker_join_command | length > 0
+        fail_msg: "Worker join command is missing because the first control plane was not initialized."
+      when: not kubelet_conf.stat.exists
 
     - name: Join worker
       ansible.builtin.command: "{{ hostvars[first_control_plane].worker_join_command }}"

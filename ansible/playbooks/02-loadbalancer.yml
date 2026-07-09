@@ -2,6 +2,7 @@
 - name: Configure HAProxy and Keepalived
   hosts: loadbalancer
   become: true
+  any_errors_fatal: true
 
   tasks:
     - name: Install HAProxy and Keepalived

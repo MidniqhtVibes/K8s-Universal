@@ -2,6 +2,7 @@
 - name: Check all hosts
   hosts: all
   become: true
+  any_errors_fatal: true
   tasks:
     - name: Ping hosts
       ansible.builtin.ping:

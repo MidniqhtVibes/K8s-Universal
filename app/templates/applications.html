@@ -1,7 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Anwendungen · {{ cluster.name }}{% endblock %}
+{% block title %}Anwendungen - {{ cluster.name }}{% endblock %}
 {% block content %}
-<div class="page-head"><div><h1>Anwendungen</h1><p class="muted">Deklarative Kubernetes-Manifeste für {{ cluster.name }}</p></div><a class="button secondary" href="/clusters/{{ cluster.id }}">Zur Clusterübersicht</a></div>
+<div class="page-head">
+  <div>
+    <h1>Anwendungen</h1>
+    <p class="muted">Deklarative Kubernetes-Manifeste fuer {{ cluster.name }}</p>
+  </div>
+  <a class="button secondary" href="/clusters/{{ cluster.id }}">Zur Clusteruebersicht</a>
+</div>
+
 <div class="grid application-grid">
   {% for bundle in bundles %}
   <a class="card application-card" href="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}">
@@ -9,8 +16,27 @@
     <p>{{ bundle.description or 'Keine Beschreibung' }}</p>
     <small>Aktualisiert {{ bundle.updated_at.strftime('%d.%m.%Y %H:%M') }}</small>
   </a>
+  {% else %}
+  <section class="empty-state">
+    <h2>Noch keine Anwendungen</h2>
+    <p class="muted">Lege eine Anwendung an oder starte mit dem Nginx-Demo-Template.</p>
+  </section>
   {% endfor %}
 </div>
-<section class="card new-application"><h2>Neue Anwendung</h2><form method="post" action="/clusters/{{ cluster.id }}/applications" class="form-grid"><label>Name<input name="name" required pattern="[a-z0-9-]+" placeholder="meine-anwendung"></label><label class="wide">Beschreibung<input name="description" placeholder="Zweck der Anwendung"></label><div class="form-submit"><button>Anwendung anlegen</button></div></form></section>
-{% endblock %}
 
+<section class="card new-application">
+  <h2>Neue Anwendung</h2>
+  <form method="post" action="/clusters/{{ cluster.id }}/applications" class="form-grid">
+    <label>Name<input name="name" required pattern="[a-z0-9-]+" placeholder="meine-anwendung"></label>
+    <label>Template
+      <select name="template_id">
+        {% for id, template in application_templates.items() %}
+        <option value="{{ id }}">{{ template.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="wide">Beschreibung<input name="description" placeholder="Zweck der Anwendung"></label>
+    <div class="form-submit"><button>Anwendung anlegen</button></div>
+  </form>
+</section>
+{% endblock %}

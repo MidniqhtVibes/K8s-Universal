@@ -18,7 +18,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .config import get_settings
 from .allocations import get_preferences, suggest_allocations, used_allocations, validate_preference_config
 from .db import Base, SessionLocal, engine, get_db
-from .manifests import create_revision, ensure_default_bundle, validate_manifest_content, validate_manifest_path
+from .manifests import APPLICATION_TEMPLATES, create_revision, render_application_template, validate_manifest_content, validate_manifest_path
 from .models import AuditEvent, ApplicationBundle, Cluster, Credential, CredentialKind, Job, JobKind, JobStatus, ManifestFile, ManifestRevision, User, utcnow
 from .kubectl_terminal import audit_safe_command, parse_kubectl_command
 from .proxmox import ProxmoxClient, ProxmoxError, split_token
@@ -344,14 +344,17 @@ def applications_page(cluster_id: str, request: Request, _: User = Depends(curre
     cluster = db.get(Cluster, cluster_id)
     if not cluster:
         raise HTTPException(404)
-    ensure_default_bundle(db, cluster)
     bundles = db.scalars(select(ApplicationBundle).where(ApplicationBundle.cluster_id == cluster_id).order_by(ApplicationBundle.name)).all()
-    return templates.TemplateResponse(request, "applications.html", {"cluster": cluster, "bundles": bundles})
+    return templates.TemplateResponse(request, "applications.html", {
+        "cluster": cluster,
+        "bundles": bundles,
+        "application_templates": APPLICATION_TEMPLATES,
+    })
 
 
 @app.post("/clusters/{cluster_id}/applications")
 def create_application(
-    cluster_id: str, name: str = Form(), description: str = Form(""),
+    cluster_id: str, name: str = Form(), description: str = Form(""), template_id: str = Form("blank"),
     _: User = Depends(current_user), db: Session = Depends(get_db),
 ):
     cluster = db.get(Cluster, cluster_id)
@@ -362,14 +365,18 @@ def create_application(
         raise HTTPException(400, "Anwendungsname darf nur Kleinbuchstaben, Zahlen und Bindestriche enthalten")
     if db.scalar(select(ApplicationBundle).where(ApplicationBundle.cluster_id == cluster_id, ApplicationBundle.name == normalized)):
         raise HTTPException(409, "Eine Anwendung mit diesem Namen existiert bereits")
+    try:
+        template_files = render_application_template(template_id, normalized)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     bundle = ApplicationBundle(cluster_id=cluster_id, name=normalized, description=description.strip()[:255])
     db.add(bundle)
     db.flush()
-    namespace = f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {normalized}\n"
-    bundle.files.append(ManifestFile(path="namespace.yaml", content=namespace))
+    for path, content in template_files.items():
+        bundle.files.append(ManifestFile(path=path, content=content))
     db.flush()
     create_revision(db, bundle, "Anwendung erstellt")
-    db.add(AuditEvent(action="create_application", object_type="application", object_id=bundle.id, details={"cluster_id": cluster_id, "name": normalized}))
+    db.add(AuditEvent(action="create_application", object_type="application", object_id=bundle.id, details={"cluster_id": cluster_id, "name": normalized, "template": template_id}))
     db.commit()
     return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}", status_code=303)
 
@@ -388,6 +395,28 @@ def application_editor(cluster_id: str, bundle_id: str, request: Request, _: Use
     jobs = [job for job in cluster_jobs if job.payload.get("bundle_id") == bundle.id][:10]
     kubeconfig_available = (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file()
     return templates.TemplateResponse(request, "application_editor.html", {"cluster": cluster, "bundle": bundle, "files": files, "selected": selected, "revisions": revisions, "jobs": jobs, "kubeconfig_available": kubeconfig_available})
+
+
+@app.post("/clusters/{cluster_id}/applications/{bundle_id}/delete")
+def delete_application(
+    cluster_id: str,
+    bundle_id: str,
+    delete_confirmation: str = Form(),
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    bundle = db.get(ApplicationBundle, bundle_id)
+    if not bundle or bundle.cluster_id != cluster_id:
+        raise HTTPException(404)
+    if delete_confirmation != bundle.name:
+        raise HTTPException(400, "Zur Bestaetigung muss der Anwendungsname eingegeben werden")
+    active_jobs = db.scalars(select(Job).where(Job.cluster_id == cluster_id, Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]))).all()
+    if any(job.payload.get("bundle_id") == bundle.id for job in active_jobs):
+        raise HTTPException(409, "Anwendung kann waehrend eines laufenden Jobs nicht geloescht werden")
+    db.add(AuditEvent(action="delete_application", object_type="application", object_id=bundle.id, details={"cluster_id": cluster_id, "name": bundle.name}))
+    db.delete(bundle)
+    db.commit()
+    return RedirectResponse(f"/clusters/{cluster_id}/applications", status_code=303)
 
 
 @app.post("/clusters/{cluster_id}/applications/{bundle_id}/files")
@@ -471,7 +500,11 @@ def restore_manifest_revision(cluster_id: str, bundle_id: str, revision_id: str,
 
 @app.post("/clusters/{cluster_id}/applications/{bundle_id}/jobs/{action}")
 def start_manifest_job(
-    cluster_id: str, bundle_id: str, action: str, apply_confirmation: str = Form(""),
+    cluster_id: str,
+    bundle_id: str,
+    action: str,
+    apply_confirmation: str = Form(""),
+    delete_confirmation: str = Form(""),
     _: User = Depends(current_user), db: Session = Depends(get_db),
 ):
     cluster = db.get(Cluster, cluster_id)
@@ -480,11 +513,13 @@ def start_manifest_job(
         raise HTTPException(404)
     if not (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file():
         raise HTTPException(409, "Anwendungsjobs sind erst nach erfolgreichem Cluster-Apply möglich")
-    kinds = {"validate": JobKind.MANIFEST_VALIDATE, "diff": JobKind.MANIFEST_DIFF, "apply": JobKind.MANIFEST_APPLY}
+    kinds = {"validate": JobKind.MANIFEST_VALIDATE, "diff": JobKind.MANIFEST_DIFF, "apply": JobKind.MANIFEST_APPLY, "delete": JobKind.MANIFEST_DELETE}
     if action not in kinds:
         raise HTTPException(404)
     if action == "apply" and apply_confirmation != bundle.name:
         raise HTTPException(400, "Für Apply muss der Anwendungsname bestätigt werden")
+    if action == "delete" and delete_confirmation != bundle.name:
+        raise HTTPException(400, "Fuer Delete muss der Anwendungsname bestaetigt werden")
     revision = create_revision(db, bundle, f"Snapshot für {action}")
     db.flush()
     try:

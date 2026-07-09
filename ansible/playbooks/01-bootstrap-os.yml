@@ -1,7 +1,9 @@
 ---
 - name: Bootstrap operating system
   hosts: all
+  gather_facts: false
   become: true
+  any_errors_fatal: true
   tasks:
     - name: Wait for cloud-init to finish
       ansible.builtin.command: cloud-init status --wait --long

@@ -16,7 +16,9 @@ class Settings(BaseSettings):
     source_root: Path = Path("/workspace")
     session_https_only: bool = False
     worker_poll_seconds: float = Field(default=2.0, ge=0.2)
-    ssh_wait_timeout: int = Field(default=600, ge=30)
+    ssh_wait_timeout: int = Field(default=900, ge=30)
+    terraform_parallelism: int = Field(default=2, ge=1, le=32)
+    ansible_forks: int = Field(default=4, ge=1, le=50)
 
 
 @lru_cache

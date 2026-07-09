@@ -2,11 +2,20 @@
 - name: Join additional control plane nodes
   hosts: control_plane:!control_plane[0]
   become: true
+  any_errors_fatal: true
   tasks:
     - name: Check if node already joined
       ansible.builtin.stat:
         path: /etc/kubernetes/kubelet.conf
       register: kubelet_conf
+
+    - name: Ensure control plane join command exists
+      ansible.builtin.assert:
+        that:
+          - hostvars[first_control_plane].control_plane_join_command is defined
+          - hostvars[first_control_plane].control_plane_join_command | length > 0
+        fail_msg: "Control-plane join command is missing because the first control plane was not initialized."
+      when: not kubelet_conf.stat.exists
 
     - name: Join control plane
       ansible.builtin.command: "{{ hostvars[first_control_plane].control_plane_join_command }}"

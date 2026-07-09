@@ -82,6 +82,30 @@ def run_command(
     return code
 
 
+def terraform_parallelism_arg() -> str:
+    return f"-parallelism={settings.terraform_parallelism}"
+
+
+def create_terraform_plan(
+    job: Job,
+    terraform_dir: Path,
+    env: dict[str, str],
+    secrets: list[str],
+    *,
+    destroy: bool = False,
+    announce_apply: bool = True,
+) -> None:
+    plan_name = "destroy.tfplan" if destroy else "tfplan"
+    if announce_apply and not destroy:
+        append_log(job.id, "Terraform-Plan wird fuer den aktuellen Apply neu erzeugt.\n")
+    run_command(job, ["terraform", "init", "-input=false"], terraform_dir, env, secrets)
+    run_command(job, ["terraform", "validate"], terraform_dir, env, secrets)
+    command = ["terraform", "plan", "-input=false", terraform_parallelism_arg(), "-out", plan_name]
+    if destroy:
+        command.extend(["-destroy", "-refresh=false"])
+    run_command(job, command, terraform_dir, env, secrets)
+
+
 def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
     deadline = time.monotonic() + settings.ssh_wait_timeout
     pending = {str(node.ip) for node in config.nodes}
@@ -135,7 +159,7 @@ def execute(job_id: str) -> None:
             raise RuntimeError("Job-Konfiguration ist veraltet")
         config = ClusterConfig.model_validate(cluster.config)
         workspace = settings.data_root / "clusters" / config.id
-        if job.kind in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY):
+        if job.kind in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY, JobKind.MANIFEST_DELETE):
             execute_manifest_job(job, cluster, workspace)
             return
         # Refresh generated inputs and IaC sources so existing clusters also pick
@@ -152,6 +176,7 @@ def execute(job_id: str) -> None:
     secrets = [token, ssh.get("private_key", "")]
     env = os.environ.copy()
     env.update({"TF_IN_AUTOMATION": "1", "PROXMOX_VE_API_TOKEN": token})
+    env["ANSIBLE_FORKS"] = str(settings.ansible_forks)
     env["KEEPALIVED_AUTH_PASS"] = job.requested_config_hash[:8]
 
     with tempfile.TemporaryDirectory(prefix="cluster-builder-") as temporary:
@@ -162,14 +187,9 @@ def execute(job_id: str) -> None:
         env["CLUSTER_KUBECONFIG_DEST"] = str(kubeconfig)
 
         if job.kind in (JobKind.PLAN, JobKind.DESTROY_PLAN):
-            validate_proxmox(job, config, token, workspace)
-            run_command(job, ["terraform", "init", "-input=false"], terraform_dir, env, secrets)
-            run_command(job, ["terraform", "validate"], terraform_dir, env, secrets)
-            plan_name = "destroy.tfplan" if job.kind == JobKind.DESTROY_PLAN else "tfplan"
-            command = ["terraform", "plan", "-input=false", "-out", plan_name]
-            if job.kind == JobKind.DESTROY_PLAN:
-                command.append("-destroy")
-            run_command(job, command, terraform_dir, env, secrets)
+            if job.kind == JobKind.PLAN:
+                validate_proxmox(job, config, token, workspace)
+            create_terraform_plan(job, terraform_dir, env, secrets, destroy=job.kind == JobKind.DESTROY_PLAN, announce_apply=False)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
@@ -182,12 +202,13 @@ def execute(job_id: str) -> None:
             return
 
         if job.kind == JobKind.APPLY:
+            create_terraform_plan(job, terraform_dir, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
                     cluster.status = ClusterStatus.APPLYING
                     db.commit()
-            run_command(job, ["terraform", "apply", "-input=false", "tfplan"], terraform_dir, env, secrets)
+            run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "tfplan"], terraform_dir, env, secrets)
             wait_for_ssh(job, config)
             run_command(job, ["ansible-playbook", "-i", "inventory.generated.yml", "site.yml"], ansible_dir, env, secrets)
             if config.addons.ingress.enabled:
@@ -208,7 +229,7 @@ def execute(job_id: str) -> None:
             return
 
         if job.kind == JobKind.DESTROY:
-            run_command(job, ["terraform", "apply", "-input=false", "destroy.tfplan"], terraform_dir, env, secrets)
+            run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "destroy.tfplan"], terraform_dir, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
@@ -253,6 +274,12 @@ def execute_manifest_job(job: Job, cluster: Cluster, workspace: Path) -> None:
         if remapped:
             append_log(job.id, f"Servervalidierung: {remapped} Ressourcen aus neu deklarierten Namespaces werden temporär gegen 'default' geprüft.\n")
         base = ["kubectl", "--kubeconfig", str(kubeconfig)]
+        if job.kind == JobKind.MANIFEST_DELETE:
+            delete_manifest = Path(temporary) / "delete.yaml"
+            delete_manifest.write_text(yaml.safe_dump_all(reversed(documents), sort_keys=False), encoding="utf-8")
+            run_command(job, [*base, "delete", "--ignore-not-found", "--wait=true", "--timeout=300s", "-f", str(delete_manifest)], workspace, env, [])
+            append_log(job.id, "Anwendungs-Bundle erfolgreich aus dem Cluster entfernt.\n")
+            return
         run_command(job, [*base, "apply", "--server-side", "--force-conflicts", "--field-manager=cluster-builder", "--dry-run=server", "-f", str(validation_manifest)], workspace, env, [])
         if job.kind == JobKind.MANIFEST_VALIDATE:
             append_log(job.id, "Serverseitige Validierung erfolgreich.\n")
@@ -318,7 +345,7 @@ def finish_job(job_id: str, error: Exception | None = None) -> None:
         elif error:
             job.status = JobStatus.FAILED
             job.error = redact(str(error))
-            if job.kind not in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY):
+            if job.kind not in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY, JobKind.MANIFEST_DELETE):
                 cluster = db.get(Cluster, job.cluster_id)
                 if cluster:
                     cluster.status = ClusterStatus.FAILED

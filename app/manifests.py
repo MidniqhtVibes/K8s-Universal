@@ -5,7 +5,7 @@ import yaml
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import ApplicationBundle, Cluster, ManifestFile, ManifestRevision
+from .models import ApplicationBundle, ManifestRevision
 
 
 PATH_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._/-]*\.ya?ml$")
@@ -26,17 +26,40 @@ KIND_PRIORITY = {
 }
 
 
-DEFAULT_NGINX_FILES = {
-    "namespace.yaml": """apiVersion: v1
+APPLICATION_TEMPLATES = {
+    "blank": {
+        "name": "Leere Anwendung",
+        "description": "Nur Namespace anlegen und eigene Manifestdateien ergaenzen",
+    },
+    "nginx-demo": {
+        "name": "Nginx Demo",
+        "description": "Namespace, Deployment, Service und Traefik Ingress",
+    },
+}
+
+
+def namespace_template(name: str) -> dict[str, str]:
+    return {
+        "namespace.yaml": f"""apiVersion: v1
 kind: Namespace
 metadata:
-  name: demo
+  name: {name}
 """,
-    "deployment.yaml": """apiVersion: apps/v1
+    }
+
+
+def nginx_demo_template(name: str) -> dict[str, str]:
+    return {
+        "namespace.yaml": """apiVersion: v1
+kind: Namespace
+metadata:
+  name: {name}
+""",
+        "deployment.yaml": """apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nginx-demo
-  namespace: demo
+  namespace: {name}
 spec:
   replicas: 3
   selector:
@@ -60,11 +83,11 @@ spec:
           ports:
             - containerPort: 80
 """,
-    "service.yaml": """apiVersion: v1
+        "service.yaml": """apiVersion: v1
 kind: Service
 metadata:
   name: nginx-demo-service
-  namespace: demo
+  namespace: {name}
 spec:
   type: ClusterIP
   selector:
@@ -74,15 +97,15 @@ spec:
       port: 80
       targetPort: 80
 """,
-    "ingress.yaml": """apiVersion: networking.k8s.io/v1
+        "ingress.yaml": """apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: nginx-demo-ingress
-  namespace: demo
+  namespace: {name}
 spec:
   ingressClassName: traefik
   rules:
-    - host: nginx.lab.local
+    - host: {name}.lab.local
       http:
         paths:
           - path: /
@@ -93,7 +116,18 @@ spec:
                 port:
                   number: 80
 """,
-}
+    }
+
+
+def render_application_template(template_id: str, name: str) -> dict[str, str]:
+    if template_id == "blank":
+        return namespace_template(name)
+    if template_id == "nginx-demo":
+        return {path: content.format(name=name) for path, content in nginx_demo_template(name).items()}
+    raise ValueError("Unbekanntes Anwendungstemplate")
+
+
+DEFAULT_NGINX_FILES = render_application_template("nginx-demo", "demo")
 
 
 def validate_manifest_path(path: str) -> str:
@@ -136,21 +170,6 @@ def create_revision(db: Session, bundle: ApplicationBundle, message: str) -> Man
     db.add(revision)
     db.flush()
     return revision
-
-
-def ensure_default_bundle(db: Session, cluster: Cluster) -> ApplicationBundle:
-    existing = db.scalar(select(ApplicationBundle).where(ApplicationBundle.cluster_id == cluster.id, ApplicationBundle.name == "nginx-demo"))
-    if existing:
-        return existing
-    bundle = ApplicationBundle(cluster_id=cluster.id, name="nginx-demo", description="Beispielanwendung mit Namespace, Deployment, Service und Traefik Ingress")
-    db.add(bundle)
-    db.flush()
-    for path, content in DEFAULT_NGINX_FILES.items():
-        bundle.files.append(ManifestFile(path=path, content=content))
-    db.flush()
-    create_revision(db, bundle, "Automatisch erzeugtes Nginx-Beispiel")
-    db.commit()
-    return bundle
 
 
 def render_snapshot(snapshot: dict) -> tuple[str, list[dict]]:

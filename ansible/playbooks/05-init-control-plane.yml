@@ -2,6 +2,7 @@
 - name: Initialize first control plane
   hosts: control_plane[0]
   become: true
+  any_errors_fatal: true
   tasks:
     - name: Check if cluster is already initialized
       ansible.builtin.stat:

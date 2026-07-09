@@ -35,6 +35,7 @@ class JobKind(str, enum.Enum):
     MANIFEST_VALIDATE = "manifest_validate"
     MANIFEST_DIFF = "manifest_diff"
     MANIFEST_APPLY = "manifest_apply"
+    MANIFEST_DELETE = "manifest_delete"
 
 
 class JobStatus(str, enum.Enum):

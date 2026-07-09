@@ -62,7 +62,7 @@ Nach erfolgreichem Apply ist das clustergebundene Terminal über die Sidebar ode
 
 ## Anwendungs-Bundles
 
-Jeder Cluster besitzt eine Anwendungsverwaltung mit mehreren YAML-Dateien pro Bundle. Beim ersten Öffnen wird automatisch `nginx-demo` mit `namespace.yaml`, `deployment.yaml`, `service.yaml` und `ingress.yaml` angelegt. Das Beispiel ist zunächst nur ein Entwurf und wird nicht ungefragt ausgerollt.
+Jeder Cluster besitzt eine Anwendungsverwaltung mit mehreren YAML-Dateien pro Bundle. Neue Cluster starten ohne vorinstallierte Anwendung. Beim Anlegen einer Anwendung kann entweder ein leeres Namespace-Template oder das Nginx-Demo-Template mit `namespace.yaml`, `deployment.yaml`, `service.yaml` und `ingress.yaml` ausgewählt werden. Das Beispiel ist zunächst nur ein Entwurf und wird nicht ungefragt ausgerollt.
 
 Der vorgesehene Ablauf lautet:
 
@@ -70,6 +70,7 @@ Der vorgesehene Ablauf lautet:
 2. **Serverseitig validieren** ausführen.
 3. Mit **Diff anzeigen** die Änderungen gegenüber dem Cluster prüfen.
 4. **Bundle anwenden** bestätigen und den Rollout im Joblog verfolgen.
+5. Optional mit **Aus Cluster entfernen** die deklarierten Ressourcen wieder löschen und danach den Builder-Eintrag entfernen.
 
 Jedes Speichern und jeder Lauf erzeugt eine unveränderliche Revision. Frühere Revisionen können als neuer Entwurf wiederhergestellt werden. Unverschlüsselte Ressourcen vom Typ `Secret` sind gesperrt; dafür ist später eine Integration mit SOPS oder Sealed Secrets vorgesehen.
 
