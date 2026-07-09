@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-head"><div><h1>Einstellungen</h1><p class="muted">Standardwerte und reservierte Vergabepools für neue Cluster.</p></div></div>
+<div class="page-head"><div><h1>Einstellungen</h1><p class="muted">Standardwerte und reservierte Vergabepools fÃ¼r neue Cluster.</p></div></div>
 {% if request.query_params.get('saved') %}<div class="success">Einstellungen gespeichert.</div>{% endif %}
-{% if error %}<div class="error"><strong>Ungültige Einstellung:</strong> {{ error }}</div>{% endif %}
+{% if error %}<div class="error"><strong>UngÃ¼ltige Einstellung:</strong> {{ error }}</div>{% endif %}
 <form method="post" action="/settings" class="stack">
-  <section class="card"><h2>Automatisierung</h2><div class="form-grid automation-grid">
+  <section class="card"><h2>Automatisierung</h2><div class="form-grid">
     <label class="check"><input type="checkbox" name="auto_suggest" {% if preferences.auto_suggest %}checked{% endif %}> Freie IPs und VM-IDs automatisch vorschlagen</label>
     <label class="check"><input type="checkbox" name="vm_name_include_cluster" {% if preferences.vm_name_include_cluster %}checked{% endif %}> Clusternamen in Proxmox-VM-Namen aufnehmen</label>
   </div></section>
@@ -13,15 +13,7 @@
     <label>DNS, kommasepariert<input name="dns_servers" value="{{ preferences.dns_servers }}" required></label><label>Pod-CIDR<input name="pod_cidr" value="{{ preferences.pod_cidr }}" required></label>
     <label>Service-CIDR<input name="service_cidr" value="{{ preferences.service_cidr }}" required></label><label class="wide">Reservierte IPs oder CIDRs<input name="reserved_ips" value="{{ preferences.reserved_ips }}" placeholder="10.200.50.2, 10.200.50.64/28"></label>
   </div></section>
-  <section class="card">
-    <div class="row">
-      <div>
-        <h2>IP-Pools</h2>
-        <p class="muted">Der Proxmox-Bereich-Button setzt alle Rollen-Pools auf den nutzbaren VM-CIDR-Bereich und reserviert das Gateway.</p>
-      </div>
-      <button type="button" class="secondary" id="use-full-proxmox-range">Gesamten Proxmox als Adressbereiche nehmen</button>
-    </div>
-    <div class="form-grid compact">
+  <section class="card"><h2>IP-Pools</h2><div class="form-grid compact">
     {% for role, label in [('vip_pool','API-VIP'),('lb_ip','Load Balancer'),('cp_ip','Control Plane'),('worker_ip','Worker')] %}<label>{{ label }} von<input name="{{ role }}_start" value="{{ preferences[role + '_start'] }}" required></label><label>{{ label }} bis<input name="{{ role }}_end" value="{{ preferences[role + '_end'] }}" required></label>{% endfor %}
   </div></section>
   <section class="card"><h2>VM-ID-Pools und Standardanzahl</h2><div class="form-grid compact">
@@ -30,54 +22,4 @@
   <section class="card"><h2>Aktuell belegt</h2><p><strong>IPs:</strong> {{ used_ips|join(', ') if used_ips else 'keine' }}</p><p><strong>VM-IDs:</strong> {{ used_vm_ids|join(', ') if used_vm_ids else 'keine' }}</p></section>
   <div class="actions"><button>Einstellungen speichern</button></div>
 </form>
-{% endblock %}
-{% block scripts %}
-<script>
-(() => {
-  const ipToInt = (ip) => {
-    const parts = ip.trim().split('.').map(Number);
-    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-      throw new Error('Ungültige IPv4-Adresse');
-    }
-    return parts.reduce((acc, part) => ((acc << 8) + part) >>> 0, 0);
-  };
-  const intToIp = (value) => [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join('.');
-  const field = (name) => document.querySelector(`[name="${name}"]`);
-  const button = document.getElementById('use-full-proxmox-range');
-  if (!button) return;
-  button.addEventListener('click', () => {
-    try {
-      const [address, prefixText] = field('network_cidr').value.trim().split('/');
-      const prefix = Number(prefixText);
-      if (!Number.isInteger(prefix) || prefix < 16 || prefix > 30) {
-        alert('Bitte zuerst eine IPv4-VM-CIDR zwischen /16 und /30 eintragen.');
-        return;
-      }
-      const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
-      const network = ipToInt(address) & mask;
-      const broadcast = network | (~mask >>> 0);
-      let start = network + 1;
-      const end = broadcast - 1;
-      const gateway = field('gateway').value.trim();
-      if (gateway && ipToInt(gateway) === start) start += 1;
-      if (start > end) {
-        alert('Der CIDR-Bereich enthält keine freien Host-Adressen.');
-        return;
-      }
-      for (const role of ['vip_pool', 'lb_ip', 'cp_ip', 'worker_ip']) {
-        field(`${role}_start`).value = intToIp(start);
-        field(`${role}_end`).value = intToIp(end);
-      }
-      if (gateway) {
-        const reserved = field('reserved_ips');
-        const tokens = reserved.value.split(',').map((item) => item.trim()).filter(Boolean);
-        if (!tokens.includes(gateway)) tokens.push(gateway);
-        reserved.value = tokens.join(', ');
-      }
-    } catch (error) {
-      alert(error.message || 'Adressbereiche konnten nicht gesetzt werden.');
-    }
-  });
-})();
-</script>
 {% endblock %}

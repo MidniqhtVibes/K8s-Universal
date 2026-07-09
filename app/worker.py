@@ -1,12 +1,8 @@
 import copy
-import json
 import os
-import queue
-import signal
 import socket
 import subprocess
 import tempfile
-import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,7 +14,7 @@ from .config import get_settings
 from .db import SessionLocal
 from .generator import render_cluster
 from .manifests import render_snapshot
-from .models import AuditEvent, ApplicationBundle, Cluster, ClusterStatus, Job, JobKind, JobStatus, ManifestRevision
+from .models import ApplicationBundle, Cluster, ClusterStatus, Job, JobKind, JobStatus, ManifestRevision
 from .schemas import ClusterConfig
 from .security import redact
 from .services import credential_payload
@@ -31,10 +27,6 @@ settings = get_settings()
 
 class JobCancelled(RuntimeError):
     pass
-
-
-def terraform_parallelism_arg() -> str:
-    return f"-parallelism={settings.terraform_parallelism}"
 
 
 def ensure_not_cancelled(job_id: str) -> None:
@@ -70,61 +62,24 @@ def run_command(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-        start_new_session=True,
     )
     assert process.stdout is not None
-    stdout_done = object()
-    output: queue.Queue[str | object] = queue.Queue()
-
-    def read_stdout() -> None:
-        try:
-            for line in process.stdout:
-                output.put(line)
-        finally:
-            output.put(stdout_done)
-
-    threading.Thread(target=read_stdout, daemon=True).start()
-    stdout_finished = False
-    while process.poll() is None or not stdout_finished:
-        try:
-            item = output.get(timeout=1)
-        except queue.Empty:
-            item = None
-        if item is stdout_done:
-            stdout_finished = True
-        elif item is None:
-            pass
-        else:
-            append_log(job.id, str(item), secrets)
-            continue
+    for line in process.stdout:
+        append_log(job.id, line, secrets)
         try:
             ensure_not_cancelled(job.id)
         except JobCancelled:
-            _terminate_process(process)
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
             raise
     code = process.wait()
     if code not in allowed_codes:
         raise RuntimeError(f"Befehl fehlgeschlagen ({code}): {' '.join(command)}")
     return code
-
-
-def _terminate_process(process: subprocess.Popen) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        if hasattr(os, "killpg"):
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
-            process.terminate()
-        process.wait(timeout=10)
-    except ProcessLookupError:
-        return
-    except subprocess.TimeoutExpired:
-        if hasattr(os, "killpg"):
-            os.killpg(process.pid, signal.SIGKILL)
-        else:
-            process.kill()
-        process.wait(timeout=5)
 
 
 def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
@@ -145,43 +100,9 @@ def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
         raise RuntimeError(f"SSH-Timeout für: {', '.join(sorted(pending))}")
 
 
-def managed_vm_ids_from_state(terraform_dir: Path) -> set[int]:
-    state_file = terraform_dir / "terraform.tfstate"
-    if not state_file.is_file():
-        return set()
-    try:
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return set()
-    ids: set[int] = set()
-    for resource in state.get("resources", []):
-        if resource.get("type") != "proxmox_virtual_environment_vm":
-            continue
-        for instance in resource.get("instances", []):
-            vm_id = instance.get("attributes", {}).get("vm_id")
-            if vm_id is not None:
-                ids.add(int(vm_id))
-    return ids
-
-
-def conflicting_storage_volumes(storage_content: object, vm_ids: set[int]) -> dict[int, list[str]]:
-    conflicts: dict[int, list[str]] = {vm_id: [] for vm_id in vm_ids}
-    if not isinstance(storage_content, list):
-        return {}
-    for item in storage_content:
-        if not isinstance(item, dict):
-            continue
-        volume = str(item.get("volid") or item.get("name") or "")
-        for vm_id in vm_ids:
-            if f"vm-{vm_id}-cloudinit" in volume or f"vm-{vm_id}-disk-" in volume:
-                conflicts[vm_id].append(volume)
-    return {vm_id: volumes for vm_id, volumes in conflicts.items() if volumes}
-
-
 def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace: Path) -> None:
     append_log(job.id, "Proxmox-Ressourcen und Konflikte werden geprüft …\n")
-    client = ProxmoxClient(config.proxmox.endpoint, api_token, config.proxmox.verify_tls)
-    discovery = client.discover()
+    discovery = ProxmoxClient(config.proxmox.endpoint, api_token, config.proxmox.verify_tls).discover()
     node_names = {item.get("node") for item in discovery.get("nodes", [])}
     if config.proxmox.node not in node_names:
         raise RuntimeError(f"Proxmox-Node {config.proxmox.node} ist nicht verfügbar")
@@ -196,33 +117,12 @@ def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace:
     templates = {int(item["vmid"]) for item in resources if item.get("template") == 1 and item.get("vmid") is not None}
     if config.proxmox.template_vm_id not in templates:
         raise RuntimeError(f"Template-VM {config.proxmox.template_vm_id} wurde nicht gefunden")
-    requested_ids = {node.vm_id for node in config.nodes}
-    managed_ids = managed_vm_ids_from_state(workspace / "terraform")
-    unmanaged_ids = requested_ids - managed_ids
-    used_ids = {int(item["vmid"]) for item in resources if item.get("vmid") is not None}
-    collisions = sorted(unmanaged_ids & used_ids)
-    if collisions:
-        raise RuntimeError(f"VM-IDs sind bereits in Proxmox belegt: {', '.join(map(str, collisions))}")
-    if unmanaged_ids:
-        storage_content = client.get(f"nodes/{config.proxmox.node}/storage/{config.proxmox.datastore}/content")
-        volume_conflicts = conflicting_storage_volumes(storage_content, unmanaged_ids)
-        if volume_conflicts:
-            details = "; ".join(f"{vm_id}: {', '.join(volumes)}" for vm_id, volumes in sorted(volume_conflicts.items()))
-            raise RuntimeError(
-                "Proxmox-Storage enthält bereits Volumes für geplante VM-IDs. "
-                "Das passiert typischerweise nach abgebrochenen oder halb gelöschten VMs. "
-                f"Bitte bereinigen oder andere VM-IDs wählen: {details}"
-            )
+    if not (workspace / "terraform" / "terraform.tfstate").exists():
+        used_ids = {int(item["vmid"]) for item in resources if item.get("vmid") is not None}
+        collisions = sorted({node.vm_id for node in config.nodes} & used_ids)
+        if collisions:
+            raise RuntimeError(f"VM-IDs sind bereits belegt: {', '.join(map(str, collisions))}")
     append_log(job.id, "Proxmox-Prüfung erfolgreich.\n")
-
-
-def create_terraform_plan(job: Job, terraform_dir: Path, env: dict[str, str], secrets: list[str], plan_name: str = "tfplan", destroy: bool = False) -> None:
-    run_command(job, ["terraform", "init", "-input=false"], terraform_dir, env, secrets)
-    run_command(job, ["terraform", "validate"], terraform_dir, env, secrets)
-    command = ["terraform", "plan", "-input=false", terraform_parallelism_arg(), "-out", plan_name]
-    if destroy:
-        command.extend(["-destroy", "-refresh=false"])
-    run_command(job, command, terraform_dir, env, secrets)
 
 
 def execute(job_id: str) -> None:
@@ -235,7 +135,7 @@ def execute(job_id: str) -> None:
             raise RuntimeError("Job-Konfiguration ist veraltet")
         config = ClusterConfig.model_validate(cluster.config)
         workspace = settings.data_root / "clusters" / config.id
-        if job.kind in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY, JobKind.MANIFEST_DELETE):
+        if job.kind in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY):
             execute_manifest_job(job, cluster, workspace)
             return
         # Refresh generated inputs and IaC sources so existing clusters also pick
@@ -262,10 +162,14 @@ def execute(job_id: str) -> None:
         env["CLUSTER_KUBECONFIG_DEST"] = str(kubeconfig)
 
         if job.kind in (JobKind.PLAN, JobKind.DESTROY_PLAN):
-            if job.kind == JobKind.PLAN:
-                validate_proxmox(job, config, token, workspace)
+            validate_proxmox(job, config, token, workspace)
+            run_command(job, ["terraform", "init", "-input=false"], terraform_dir, env, secrets)
+            run_command(job, ["terraform", "validate"], terraform_dir, env, secrets)
             plan_name = "destroy.tfplan" if job.kind == JobKind.DESTROY_PLAN else "tfplan"
-            create_terraform_plan(job, terraform_dir, env, secrets, plan_name, job.kind == JobKind.DESTROY_PLAN)
+            command = ["terraform", "plan", "-input=false", "-out", plan_name]
+            if job.kind == JobKind.DESTROY_PLAN:
+                command.append("-destroy")
+            run_command(job, command, terraform_dir, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
@@ -278,15 +182,12 @@ def execute(job_id: str) -> None:
             return
 
         if job.kind == JobKind.APPLY:
-            validate_proxmox(job, config, token, workspace)
-            append_log(job.id, "Terraform-Plan wird fuer den aktuellen Apply neu erzeugt, damit Wiederholungen nach Teilfehlern oder Worker-Neustarts stabil sind.\n")
-            create_terraform_plan(job, terraform_dir, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
                     cluster.status = ClusterStatus.APPLYING
                     db.commit()
-            run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "tfplan"], terraform_dir, env, secrets)
+            run_command(job, ["terraform", "apply", "-input=false", "tfplan"], terraform_dir, env, secrets)
             wait_for_ssh(job, config)
             run_command(job, ["ansible-playbook", "-i", "inventory.generated.yml", "site.yml"], ansible_dir, env, secrets)
             if config.addons.ingress.enabled:
@@ -307,7 +208,7 @@ def execute(job_id: str) -> None:
             return
 
         if job.kind == JobKind.DESTROY:
-            run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "destroy.tfplan"], terraform_dir, env, secrets)
+            run_command(job, ["terraform", "apply", "-input=false", "destroy.tfplan"], terraform_dir, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
@@ -335,19 +236,6 @@ def execute_manifest_job(job: Job, cluster: Cluster, workspace: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="cluster-manifests-") as temporary:
         manifest = Path(temporary) / "bundle.yaml"
         manifest.write_text(rendered, encoding="utf-8")
-        if job.kind == JobKind.MANIFEST_DELETE:
-            delete_manifest = Path(temporary) / "delete-bundle.yaml"
-            delete_manifest.write_text(yaml.safe_dump_all(reversed(documents), sort_keys=False), encoding="utf-8")
-            base = ["kubectl", "--kubeconfig", str(kubeconfig)]
-            run_command(job, [*base, "delete", "--ignore-not-found=true", "-f", str(delete_manifest)], workspace, env, [])
-            with SessionLocal() as db:
-                bundle = db.get(ApplicationBundle, str(job.payload.get("bundle_id", "")))
-                if bundle and bundle.cluster_id == cluster.id:
-                    db.add(AuditEvent(action="delete_application", object_type="application", object_id=bundle.id, details={"cluster_id": cluster.id, "name": bundle.name}))
-                    db.delete(bundle)
-                    db.commit()
-            append_log(job.id, "Anwendungs-Bundle erfolgreich aus Kubernetes und Builder entfernt.\n")
-            return
         declared_namespaces = {
             str(document.get("metadata", {}).get("name"))
             for document in documents
@@ -414,21 +302,6 @@ def claim_job() -> str | None:
         return job.id
 
 
-def recover_interrupted_jobs() -> None:
-    with SessionLocal() as db:
-        jobs = db.scalars(select(Job).where(Job.status == JobStatus.RUNNING)).all()
-        for job in jobs:
-            job.status = JobStatus.FAILED
-            job.finished_at = datetime.now(UTC)
-            job.error = "Worker wurde während dieses Jobs neu gestartet"
-            job.log = (job.log or "") + "\nFEHLER: Worker wurde während dieses Jobs neu gestartet. Bitte den Job erneut starten.\n"
-            if job.kind not in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY, JobKind.MANIFEST_DELETE):
-                cluster = db.get(Cluster, job.cluster_id)
-                if cluster:
-                    cluster.status = ClusterStatus.FAILED
-        db.commit()
-
-
 def finish_job(job_id: str, error: Exception | None = None) -> None:
     with SessionLocal() as db:
         job = db.get(Job, job_id)
@@ -445,7 +318,7 @@ def finish_job(job_id: str, error: Exception | None = None) -> None:
         elif error:
             job.status = JobStatus.FAILED
             job.error = redact(str(error))
-            if job.kind not in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY, JobKind.MANIFEST_DELETE):
+            if job.kind not in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY):
                 cluster = db.get(Cluster, job.cluster_id)
                 if cluster:
                     cluster.status = ClusterStatus.FAILED
@@ -455,7 +328,6 @@ def finish_job(job_id: str, error: Exception | None = None) -> None:
 
 
 def main() -> None:
-    recover_interrupted_jobs()
     while True:
         job_id = claim_job()
         if not job_id:

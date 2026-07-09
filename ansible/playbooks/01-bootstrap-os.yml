@@ -2,73 +2,17 @@
 - name: Bootstrap operating system
   hosts: all
   become: true
-  any_errors_fatal: true
   tasks:
-    - name: Poll cloud-init status until cleanly finished
-      ansible.builtin.command: cloud-init status --long
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait --long
       register: cloud_init_status
       changed_when: false
-      failed_when: false
-      until: >-
-        cloud_init_status.rc in [0, 2]
-        and 'status: done' in cloud_init_status.stdout
-        and 'errors: []' in cloud_init_status.stdout
-      retries: 80
-      delay: 15
-
-    - name: Collect cloud-init output log on failure
-      ansible.builtin.command:
-        argv:
-          - tail
-          - -n
-          - "160"
-          - /var/log/cloud-init-output.log
-      register: cloud_init_output_log
-      changed_when: false
-      failed_when: false
-      when: >-
+      failed_when: >-
         cloud_init_status.rc not in [0, 2]
         or 'status: done' not in cloud_init_status.stdout
         or 'errors: []' not in cloud_init_status.stdout
-
-    - name: Collect cloud-init debug log on failure
-      ansible.builtin.command:
-        argv:
-          - tail
-          - -n
-          - "160"
-          - /var/log/cloud-init.log
-      register: cloud_init_debug_log
-      changed_when: false
-      failed_when: false
-      when: >-
-        cloud_init_status.rc not in [0, 2]
-        or 'status: done' not in cloud_init_status.stdout
-        or 'errors: []' not in cloud_init_status.stdout
-
-    - name: Fail if cloud-init did not finish cleanly
-      ansible.builtin.fail:
-        msg: |
-          cloud-init did not finish cleanly on {{ inventory_hostname }}.
-
-          cloud-init rc:
-          {{ cloud_init_status.rc }}
-
-          cloud-init stdout:
-          {{ cloud_init_status.stdout }}
-
-          cloud-init stderr:
-          {{ cloud_init_status.stderr }}
-
-          /var/log/cloud-init-output.log:
-          {{ cloud_init_output_log.stdout | default('not collected') }}
-
-          /var/log/cloud-init.log:
-          {{ cloud_init_debug_log.stdout | default('not collected') }}
-      when: >-
-        cloud_init_status.rc not in [0, 2]
-        or 'status: done' not in cloud_init_status.stdout
-        or 'errors: []' not in cloud_init_status.stdout
+      async: 900
+      poll: 5
 
     - name: Wait for apt and dpkg locks to become available
       ansible.builtin.shell: |

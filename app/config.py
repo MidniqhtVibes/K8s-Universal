@@ -17,9 +17,9 @@ class Settings(BaseSettings):
     session_https_only: bool = False
     worker_poll_seconds: float = Field(default=2.0, ge=0.2)
     ssh_wait_timeout: int = Field(default=600, ge=30)
-    terraform_parallelism: int = Field(default=2, ge=1, le=20)
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
+

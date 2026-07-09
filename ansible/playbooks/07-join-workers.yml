@@ -2,7 +2,6 @@
 - name: Join worker nodes
   hosts: worker
   become: true
-  any_errors_fatal: true
   tasks:
     - name: Check if worker already joined
       ansible.builtin.stat:

@@ -18,7 +18,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .config import get_settings
 from .allocations import get_preferences, suggest_allocations, used_allocations, validate_preference_config
 from .db import Base, SessionLocal, engine, get_db
-from .manifests import create_revision, default_nginx_files, validate_manifest_content, validate_manifest_path
+from .manifests import create_revision, ensure_default_bundle, validate_manifest_content, validate_manifest_path
 from .models import AuditEvent, ApplicationBundle, Cluster, Credential, CredentialKind, Job, JobKind, JobStatus, ManifestFile, ManifestRevision, User, utcnow
 from .kubectl_terminal import audit_safe_command, parse_kubectl_command
 from .proxmox import ProxmoxClient, ProxmoxError, split_token
@@ -110,25 +110,6 @@ def dashboard(request: Request, _: User = Depends(current_user), db: Session = D
 def credentials_page(request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
     credentials = db.scalars(select(Credential).order_by(Credential.created_at.desc())).all()
     return templates.TemplateResponse(request, "credentials.html", {"credentials": credentials})
-
-
-@app.post("/credentials/{credential_id}/delete")
-def delete_credential(credential_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)):
-    credential = db.get(Credential, credential_id)
-    if not credential:
-        raise HTTPException(404)
-    reference = f"credential://{credential.id}"
-    referencing_clusters = []
-    for cluster in db.scalars(select(Cluster).order_by(Cluster.name)).all():
-        config = cluster.config or {}
-        if config.get("proxmox", {}).get("credential_ref") == reference or config.get("ssh", {}).get("credential_ref") == reference:
-            referencing_clusters.append(cluster.name)
-    if referencing_clusters:
-        return RedirectResponse("/credentials?error=used", status_code=303)
-    db.add(AuditEvent(action="delete_credential", object_type="credential", object_id=credential.id, details={"name": credential.name, "kind": credential.kind.value}))
-    db.delete(credential)
-    db.commit()
-    return RedirectResponse("/credentials?deleted=1", status_code=303)
 
 
 @app.post("/credentials/proxmox")
@@ -363,23 +344,14 @@ def applications_page(cluster_id: str, request: Request, _: User = Depends(curre
     cluster = db.get(Cluster, cluster_id)
     if not cluster:
         raise HTTPException(404)
-    delete_jobs = db.scalars(select(Job).where(
-        Job.cluster_id == cluster_id,
-        Job.kind == JobKind.MANIFEST_DELETE,
-        Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
-    )).all()
-    deleting_bundle_ids = {str(job.payload.get("bundle_id")) for job in delete_jobs if job.payload.get("bundle_id")}
-    bundles = [
-        bundle
-        for bundle in db.scalars(select(ApplicationBundle).where(ApplicationBundle.cluster_id == cluster_id).order_by(ApplicationBundle.name)).all()
-        if bundle.id not in deleting_bundle_ids
-    ]
+    ensure_default_bundle(db, cluster)
+    bundles = db.scalars(select(ApplicationBundle).where(ApplicationBundle.cluster_id == cluster_id).order_by(ApplicationBundle.name)).all()
     return templates.TemplateResponse(request, "applications.html", {"cluster": cluster, "bundles": bundles})
 
 
 @app.post("/clusters/{cluster_id}/applications")
 def create_application(
-    cluster_id: str, name: str = Form(), description: str = Form(""), template: str = Form("blank"),
+    cluster_id: str, name: str = Form(), description: str = Form(""),
     _: User = Depends(current_user), db: Session = Depends(get_db),
 ):
     cluster = db.get(Cluster, cluster_id)
@@ -393,14 +365,8 @@ def create_application(
     bundle = ApplicationBundle(cluster_id=cluster_id, name=normalized, description=description.strip()[:255])
     db.add(bundle)
     db.flush()
-    if template == "nginx_demo":
-        for path, content in default_nginx_files(cluster, normalized).items():
-            bundle.files.append(ManifestFile(path=path, content=content))
-    elif template == "blank":
-        namespace = f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {normalized}\n"
-        bundle.files.append(ManifestFile(path="namespace.yaml", content=namespace))
-    else:
-        raise HTTPException(400, "Unbekannte Anwendungsvorlage")
+    namespace = f"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: {normalized}\n"
+    bundle.files.append(ManifestFile(path="namespace.yaml", content=namespace))
     db.flush()
     create_revision(db, bundle, "Anwendung erstellt")
     db.add(AuditEvent(action="create_application", object_type="application", object_id=bundle.id, details={"cluster_id": cluster_id, "name": normalized}))
@@ -408,40 +374,12 @@ def create_application(
     return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}", status_code=303)
 
 
-@app.post("/clusters/{cluster_id}/applications/{bundle_id}/delete")
-def delete_application(
-    cluster_id: str, bundle_id: str, delete_confirmation: str = Form(""),
-    _: User = Depends(current_user), db: Session = Depends(get_db),
-):
-    cluster = db.get(Cluster, cluster_id)
-    bundle = db.get(ApplicationBundle, bundle_id)
-    if not cluster or not bundle or bundle.cluster_id != cluster_id:
-        raise HTTPException(404)
-    if delete_confirmation != bundle.name:
-        raise HTTPException(400, "Zur Bestätigung muss der Anwendungsname eingegeben werden")
-    kubeconfig_available = (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file()
-    if not kubeconfig_available:
-        db.add(AuditEvent(action="delete_application_record", object_type="application", object_id=bundle.id, details={"cluster_id": cluster_id, "name": bundle.name}))
-        db.delete(bundle)
-        db.commit()
-        return RedirectResponse(f"/clusters/{cluster_id}/applications?deleted=1", status_code=303)
-    revision = create_revision(db, bundle, "Snapshot für Anwendungslöschung")
-    db.flush()
-    try:
-        queue_job(db, cluster, JobKind.MANIFEST_DELETE, {"bundle_id": bundle.id, "revision_id": revision.id})
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    return RedirectResponse(f"/clusters/{cluster_id}/applications?delete_queued=1", status_code=303)
-
-
 @app.get("/clusters/{cluster_id}/applications/{bundle_id}", response_class=HTMLResponse)
 def application_editor(cluster_id: str, bundle_id: str, request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
     cluster = db.get(Cluster, cluster_id)
     bundle = db.get(ApplicationBundle, bundle_id)
-    if not cluster:
+    if not cluster or not bundle or bundle.cluster_id != cluster_id:
         raise HTTPException(404)
-    if not bundle or bundle.cluster_id != cluster_id:
-        return RedirectResponse(f"/clusters/{cluster_id}/applications?missing=1", status_code=303)
     files = db.scalars(select(ManifestFile).where(ManifestFile.bundle_id == bundle.id).order_by(ManifestFile.path)).all()
     selected_id = request.query_params.get("file")
     selected = next((item for item in files if item.id == selected_id), files[0] if files else None)

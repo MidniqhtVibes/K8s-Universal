@@ -2,7 +2,6 @@
 - name: Configure HAProxy and Keepalived
   hosts: loadbalancer
   become: true
-  any_errors_fatal: true
 
   tasks:
     - name: Install HAProxy and Keepalived
@@ -12,10 +11,7 @@
           - keepalived
         state: present
         update_cache: true
-        cache_valid_time: 3600
         lock_timeout: 600
-        update_cache_retries: 5
-        update_cache_retry_max_delay: 30
 
     - name: Configure HAProxy
       ansible.builtin.copy:
@@ -134,63 +130,6 @@
         name: keepalived
         enabled: true
         state: started
-
-    - name: Apply pending load balancer service restarts
-      ansible.builtin.meta: flush_handlers
-
-    - name: Wait for HAProxy to listen on Kubernetes API port
-      ansible.builtin.wait_for:
-        host: "127.0.0.1"
-        port: "{{ api_port }}"
-        state: started
-        timeout: 60
-
-    - name: Wait for Keepalived master to own the API VIP
-      ansible.builtin.command:
-        argv:
-          - ip
-          - -o
-          - addr
-          - show
-          - to
-          - "{{ api_vip }}"
-      register: keepalived_master_vip_check
-      changed_when: false
-      until: keepalived_master_vip_check.stdout | trim | length > 0
-      retries: 12
-      delay: 5
-      when: inventory_hostname == keepalived_master
-
-    - name: Check whether this load balancer owns the API VIP
-      ansible.builtin.command:
-        argv:
-          - ip
-          - -o
-          - addr
-          - show
-          - to
-          - "{{ api_vip }}"
-      register: keepalived_vip_check
-      changed_when: false
-      failed_when: false
-
-    - name: Wait until one load balancer owns the API VIP
-      ansible.builtin.assert:
-        that:
-          - groups['loadbalancer'] | map('extract', hostvars, 'keepalived_vip_check') | select('defined') | map(attribute='stdout') | map('trim') | reject('equalto', '') | list | length == 1
-        fail_msg: >-
-          Keepalived did not assign API VIP {{ api_vip }} to exactly one load balancer.
-          Check keepalived status, VRRP/firewall rules, interface selection and KEEPALIVED_AUTH_PASS.
-        success_msg: "API VIP {{ api_vip }} is assigned to one load balancer."
-      run_once: true
-
-    - name: Wait for API VIP TCP port through HAProxy
-      ansible.builtin.wait_for:
-        host: "{{ api_vip }}"
-        port: "{{ api_port }}"
-        state: started
-        timeout: 60
-      run_once: true
 
   handlers:
     - name: Restart HAProxy

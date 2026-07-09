@@ -19,12 +19,12 @@
     <aside class="sidebar">
       <div class="sidebar-label">Verwaltung</div>
       <nav>
-        <a href="/" class="{% if request.url.path == '/' %}active{% endif %}"><span>▦</span> Cluster</a>
+        <a href="/" class="{% if request.url.path == '/' or (request.url.path.startswith('/clusters/') and request.url.path != '/clusters/new') %}active{% endif %}"><span>▦</span> Cluster</a>
         {% if sidebar_clusters %}
         <div class="cluster-links">
           {% for sidebar_cluster in sidebar_clusters %}
           <div class="cluster-entry">
-            <a href="/clusters/{{ sidebar_cluster.id }}" class="cluster-link {% if request.url.path == '/clusters/' + sidebar_cluster.id or request.url.path == '/clusters/' + sidebar_cluster.id + '/edit' %}active{% endif %}">
+            <a href="/clusters/{{ sidebar_cluster.id }}" class="cluster-link {% if request.url.path == '/clusters/' + sidebar_cluster.id %}active{% endif %}">
               <span class="cluster-dot {{ sidebar_cluster.status.value }}"></span>
               <span class="cluster-link-text">{{ sidebar_cluster.name }}</span>
             </a>
@@ -42,6 +42,7 @@
     {% endif %}
     <main>{% block content %}{% endblock %}</main>
   </div>
+  {% if request.session.get('user_id') and request.url.scheme != 'https' %}<div class="http-warning">HTTP aktiv: Zugangsdaten nur in einem vertrauenswürdigen internen Netz eingeben.</div>{% endif %}
   {% block scripts %}{% endblock %}
 </body>
 </html>

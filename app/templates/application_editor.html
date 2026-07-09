@@ -27,24 +27,13 @@
       <form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/jobs/diff"><button class="secondary full" {% if not kubeconfig_available %}disabled{% endif %}>Diff anzeigen</button></form>
       <form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/jobs/apply" onsubmit="return confirm('Revision wirklich auf {{ cluster.name }} anwenden?')"><input name="apply_confirmation" value="{{ bundle.name }}" type="hidden"><button class="full" {% if not kubeconfig_available %}disabled{% endif %}>Bundle anwenden</button></form>
     </div>
-    <div class="danger-zone">
-      <h3>Anwendung löschen</h3>
-      <p class="muted">{% if kubeconfig_available %}Entfernt die Manifeste per kubectl delete und löscht danach den Builder-Eintrag.{% else %}Löscht nur den Builder-Entwurf, weil noch keine Kubeconfig vorhanden ist.{% endif %}</p>
-      <form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/delete" onsubmit="return confirm('Anwendung {{ bundle.name }} wirklich löschen?')">
-        <label>Zur Bestätigung Anwendungsname eingeben<input name="delete_confirmation" required placeholder="{{ bundle.name }}"></label>
-        <button class="danger full">Anwendung löschen</button>
-      </form>
-    </div>
+    <hr><h3>Revisionen</h3><div class="revision-list">{% for revision in revisions %}<div class="revision"><div><strong>v{{ revision.version }}</strong>{% if revision.applied_at %}<span class="badge ready">applied</span>{% endif %}<small>{{ revision.created_at.strftime('%d.%m. %H:%M') }}</small></div><p>{{ revision.message }}</p><form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/revisions/{{ revision.id }}/restore" onsubmit="return confirm('Revision {{ revision.version }} als neuen Entwurf wiederherstellen?')"><button class="link-button">Wiederherstellen</button></form></div>{% endfor %}</div>
   </aside>
 </div>
-
-<section class="card">
-  <h2>Revisionen</h2>
-  <div class="revision-list">{% for revision in revisions %}<div class="revision"><div><strong>v{{ revision.version }}</strong>{% if revision.applied_at %}<span class="badge ready">applied</span>{% endif %}<small>{{ revision.created_at.strftime('%d.%m. %H:%M') }}</small></div><p>{{ revision.message }}</p><form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/revisions/{{ revision.id }}/restore" onsubmit="return confirm('Revision {{ revision.version }} als neuen Entwurf wiederherstellen?')"><button class="link-button">Wiederherstellen</button></form></div>{% else %}<p class="muted">Noch keine Revisionen vorhanden.</p>{% endfor %}</div>
-</section>
 
 <section class="card"><h2>Manifest-Jobs</h2>{% for job in jobs %}<details {% if loop.first %}open{% endif %} data-job-id="{{ job.id }}" data-status="{{ job.status.value }}"><summary><span>{{ job.kind.value }}</span><span class="badge {{ job.status.value }} job-status">{{ job.status.value }}</span><small>{{ job.created_at.strftime('%d.%m.%Y %H:%M') }}</small>{% if job.status.value in ['queued','running'] %}<form method="post" action="/jobs/{{ job.id }}/cancel"><button class="secondary">Abbrechen</button></form>{% endif %}</summary><pre class="job-log">{{ job.log or 'Wartet auf Worker …' }}</pre>{% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}</details>{% else %}<p class="muted">Noch keine Validierung oder Bereitstellung ausgeführt.</p>{% endfor %}</section>
 {% endblock %}
 {% block scripts %}
 {% if selected %}<link rel="stylesheet" href="/static/vendor/codemirror.css"><script src="/static/vendor/codemirror.js"></script><script src="/static/vendor/codemirror-yaml.js"></script><script src="/static/manifest-editor.js"></script>{% endif %}<script src="/static/jobs.js"></script>
 {% endblock %}
+

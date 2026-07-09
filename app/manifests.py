@@ -26,39 +26,26 @@ KIND_PRIORITY = {
 }
 
 
-def cluster_dns_label(cluster: Cluster) -> str:
-    label = re.sub(r"[^a-z0-9]", "", cluster.name.lower())
-    if not label:
-        label = re.sub(r"[^a-z0-9]", "", cluster.id.lower())[:20]
-    return label[:63] or "cluster"
-
-
-def default_nginx_files(cluster: Cluster, bundle_name: str = "nginx-demo") -> dict[str, str]:
-    namespace = "demo" if bundle_name == "nginx-demo" else bundle_name
-    resource_name = "nginx-demo" if bundle_name == "nginx-demo" else "nginx"
-    service_name = f"{resource_name}-service"
-    host_prefix = "nginx" if bundle_name == "nginx-demo" else bundle_name
-    host = f"{host_prefix}.{cluster_dns_label(cluster)}.local"
-    return {
+DEFAULT_NGINX_FILES = {
     "namespace.yaml": """apiVersion: v1
 kind: Namespace
 metadata:
-  name: """ + namespace + """
+  name: demo
 """,
     "deployment.yaml": """apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: """ + resource_name + """
-  namespace: """ + namespace + """
+  name: nginx-demo
+  namespace: demo
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: """ + resource_name + """
+      app: nginx-demo
   template:
     metadata:
       labels:
-        app: """ + resource_name + """
+        app: nginx-demo
     spec:
       topologySpreadConstraints:
         - maxSkew: 1
@@ -66,7 +53,7 @@ spec:
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              app: """ + resource_name + """
+              app: nginx-demo
       containers:
         - name: nginx
           image: nginx:1.27
@@ -76,12 +63,12 @@ spec:
     "service.yaml": """apiVersion: v1
 kind: Service
 metadata:
-  name: """ + service_name + """
-  namespace: """ + namespace + """
+  name: nginx-demo-service
+  namespace: demo
 spec:
   type: ClusterIP
   selector:
-    app: """ + resource_name + """
+    app: nginx-demo
   ports:
     - name: http
       port: 80
@@ -90,26 +77,23 @@ spec:
     "ingress.yaml": """apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: """ + resource_name + """
-  namespace: """ + namespace + """
+  name: nginx-demo-ingress
+  namespace: demo
 spec:
   ingressClassName: traefik
   rules:
-    - host: """ + host + """
+    - host: nginx.lab.local
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: """ + service_name + """
+                name: nginx-demo-service
                 port:
                   number: 80
 """,
-    }
-
-
-DEFAULT_NGINX_FILES = default_nginx_files(Cluster(id="example", name="lab"))
+}
 
 
 def validate_manifest_path(path: str) -> str:
@@ -161,7 +145,7 @@ def ensure_default_bundle(db: Session, cluster: Cluster) -> ApplicationBundle:
     bundle = ApplicationBundle(cluster_id=cluster.id, name="nginx-demo", description="Beispielanwendung mit Namespace, Deployment, Service und Traefik Ingress")
     db.add(bundle)
     db.flush()
-    for path, content in default_nginx_files(cluster).items():
+    for path, content in DEFAULT_NGINX_FILES.items():
         bundle.files.append(ManifestFile(path=path, content=content))
     db.flush()
     create_revision(db, bundle, "Automatisch erzeugtes Nginx-Beispiel")

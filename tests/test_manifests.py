@@ -1,7 +1,6 @@
 import pytest
 
-from app.manifests import DEFAULT_NGINX_FILES, cluster_dns_label, default_nginx_files, render_snapshot, validate_manifest_content, validate_manifest_path
-from app.models import Cluster
+from app.manifests import DEFAULT_NGINX_FILES, render_snapshot, validate_manifest_content, validate_manifest_path
 
 
 def test_default_nginx_bundle_contains_expected_structure():
@@ -10,20 +9,6 @@ def test_default_nginx_bundle_contains_expected_structure():
     assert documents[0]["kind"] == "Namespace"
     assert {item["kind"] for item in documents} == {"Namespace", "Deployment", "Service", "Ingress"}
     assert "nginx.lab.local" in rendered
-
-
-def test_default_nginx_bundle_uses_cluster_specific_hostname():
-    cluster = Cluster(id="cluster-id", name="Prod.Cluster-01")
-    rendered, _ = render_snapshot(default_nginx_files(cluster))
-    assert cluster_dns_label(cluster) == "prodcluster01"
-    assert "nginx.prodcluster01.local" in rendered
-
-
-def test_custom_nginx_bundle_uses_application_specific_hostname_and_namespace():
-    cluster = Cluster(id="cluster-id", name="Prod.Cluster-01")
-    rendered, _ = render_snapshot(default_nginx_files(cluster, "dashboard"))
-    assert "namespace: dashboard" in rendered
-    assert "host: dashboard.prodcluster01.local" in rendered
 
 
 def test_plain_kubernetes_secret_is_blocked():
