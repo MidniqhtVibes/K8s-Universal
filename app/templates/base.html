@@ -37,7 +37,7 @@
 
             <div class="cluster-links">
               <a href="/" class="cluster-overview-link {% if request.url.path == '/' %}active{% endif %}">
-                <span class="nav-icon">O</span>
+                <span class="nav-icon"></span>
                 <span class="nav-text">Uebersicht</span>
               </a>
               {% for sidebar_cluster in sidebar_clusters %}
@@ -53,22 +53,22 @@
                 <span class="nav-text">Anwendungen</span>
               </a>
               {% endfor %}
-              <a href="/clusters/new" class="new-cluster-link {% if request.url.path == '/clusters/new' %}active{% endif %}">
-                <span class="nav-icon">+</span>
-                <span class="nav-text">Neuer Cluster</span>
-              </a>
             </div>
           </details>
+          <a href="/clusters/new" class="new-cluster-link {% if request.url.path == '/clusters/new' %}active{% endif %}">
+            <span class="nav-icon">+</span>
+            <span class="nav-text">Neuer Cluster</span>
+          </a>
         </nav>
       </div>
 
       <nav class="sidebar-bottom">
         <a href="/credentials" class="{% if request.url.path == '/credentials' %}active{% endif %}">
-          <span class="nav-icon">K</span>
+          <span class="nav-icon">C</span>
           <span class="nav-text">Credentials</span>
         </a>
         <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">
-          <span class="nav-icon">S</span>
+          <span class="nav-icon">E</span>
           <span class="nav-text">Einstellungen</span>
         </a>
       </nav>

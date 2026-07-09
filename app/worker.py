@@ -1,10 +1,12 @@
 import copy
+import json
 import os
+import re
 import socket
 import subprocess
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import yaml
@@ -41,6 +43,7 @@ def append_log(job_id: str, text: str, secrets: list[str] | None = None) -> None
         job = db.get(Job, job_id)
         if job:
             job.log = (job.log or "") + redact(text, secrets)
+            job.heartbeat_at = datetime.now(UTC)
             db.commit()
 
 
@@ -104,6 +107,86 @@ def create_terraform_plan(
     if destroy:
         command.extend(["-destroy", "-refresh=false"])
     run_command(job, command, terraform_dir, env, secrets)
+
+
+def is_manifest_job(kind: JobKind) -> bool:
+    return kind in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY, JobKind.MANIFEST_DELETE)
+
+
+def recommended_next_step(text: str) -> str:
+    if "Too Many Requests" in text or "status code=429" in text:
+        return "Apply spaeter erneut starten; der externe Download wurde rate-limitiert."
+    if "Could not resolve host" in text or "Temporary failure resolving" in text:
+        return "DNS/Gateway der Ziel-VMs pruefen oder Apply erneut starten, falls es ein kurzer Aussetzer war."
+    if "NO_PUBKEY" in text:
+        return "Mit der aktuellen Version Apply erneut starten; der Kubernetes-APT-Keyring wird neu aufgebaut."
+    if "SSH-Timeout" in text:
+        return "IPs, VLAN, Gateway, Cloud-Init und SSH-Key pruefen."
+    if "CoreDNS" in text:
+        return "Direkt oberhalb im Log Pod-Status, Deployment-Details und Events pruefen."
+    if "Befehl fehlgeschlagen" in text:
+        return "Die letzte FAILED-, fatal- oder error-Zeile oberhalb enthaelt die konkrete Ursache."
+    return "Die letzten Logzeilen oberhalb pruefen und denselben Job nach Behebung erneut starten."
+
+
+def extract_ansible_failure(log: str) -> tuple[str | None, str | None, str | None]:
+    task = None
+    for match in re.finditer(r"^TASK \[(.+?)\]", log, re.MULTILINE):
+        task = match.group(1)
+    fatal = None
+    for match in re.finditer(r"^fatal: \[([^\]]+)\]: FAILED! => (.+)$", log, re.MULTILINE):
+        fatal = match
+    if not fatal:
+        return None, task, None
+    host = fatal.group(1)
+    raw_payload = fatal.group(2).strip()
+    cause = raw_payload
+    if raw_payload.startswith("{"):
+        try:
+            payload = json.loads(raw_payload)
+            cause = str(payload.get("stderr") or payload.get("msg") or payload.get("stdout") or raw_payload)
+        except json.JSONDecodeError:
+            pass
+    cause = " ".join(cause.split())
+    if len(cause) > 600:
+        cause = cause[:597] + "..."
+    return host, task, cause
+
+
+def job_log_tail(job_id: str, limit: int = 12000) -> str:
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if not job or not job.log:
+            return ""
+        return job.log[-limit:]
+
+
+def failure_summary(error: Exception, log: str = "") -> str | None:
+    text = f"{error}\n{log}"
+    host, task, cause = extract_ansible_failure(log)
+    if host or task or cause:
+        lines = ["Kurzdiagnose:"]
+        if host:
+            lines.append(f"- Host: {host}")
+        if task:
+            lines.append(f"- Task: {task}")
+        if cause:
+            lines.append(f"- Ursache: {cause}")
+        lines.append(f"- Naechster Schritt: {recommended_next_step(text)}")
+        return "\n".join(lines)
+    if "Too Many Requests" in text or "status code=429" in text:
+        return "Kurzdiagnose: Externer Download wurde rate-limitiert.\nNaechster Schritt: " + recommended_next_step(text)
+    if "Could not resolve host" in text or "Temporary failure resolving" in text:
+        return "Kurzdiagnose: DNS-Aufloesung auf mindestens einem Zielhost fehlgeschlagen.\nNaechster Schritt: " + recommended_next_step(text)
+    if "NO_PUBKEY" in text:
+        return "Kurzdiagnose: APT-Keyring ist unvollstaendig oder fehlt.\nNaechster Schritt: " + recommended_next_step(text)
+    if "SSH-Timeout" in text:
+        return "Kurzdiagnose: Nicht alle VMs waren per SSH erreichbar.\nNaechster Schritt: " + recommended_next_step(text)
+    if "CoreDNS" in text:
+        return "Kurzdiagnose: CoreDNS wurde nicht rechtzeitig bereit.\nNaechster Schritt: " + recommended_next_step(text)
+    if "Befehl fehlgeschlagen" in text:
+        return "Kurzdiagnose: Ein externer Terraform-, Ansible-, Helm- oder kubectl-Befehl ist fehlgeschlagen.\nNaechster Schritt: " + recommended_next_step(text)
+    return None
 
 
 def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
@@ -182,6 +265,25 @@ def ingress_test_commands(documents: list[dict], api_vip: str) -> list[str]:
     return commands
 
 
+def run_ansible_stack(
+    job: Job,
+    config: ClusterConfig,
+    workspace: Path,
+    ansible_dir: Path,
+    kubeconfig: Path,
+    env: dict[str, str],
+    secrets: list[str],
+) -> None:
+    wait_for_ssh(job, config)
+    run_command(job, ["ansible-playbook", "-i", "inventory.generated.yml", "site.yml"], ansible_dir, env, secrets)
+    if config.addons.ingress.enabled:
+        run_command(job, ["helm", "repo", "add", "traefik", "https://traefik.github.io/charts", "--force-update"], workspace, env, secrets)
+        run_command(job, ["helm", "repo", "update"], workspace, env, secrets)
+        run_command(job, ["helm", "upgrade", "--install", "traefik", "traefik/traefik", "--namespace", "traefik", "--create-namespace", "-f", str(workspace / "generated" / "traefik-values.yaml"), "--kubeconfig", str(kubeconfig)], workspace, env, secrets)
+        run_command(job, ["ansible-playbook", "-i", "inventory.generated.yml", "playbooks/02-loadbalancer.yml"], ansible_dir, env, secrets)
+    verify_cluster(job, workspace, env, secrets)
+
+
 def execute(job_id: str) -> None:
     with SessionLocal() as db:
         job = db.get(Job, job_id)
@@ -192,7 +294,7 @@ def execute(job_id: str) -> None:
             raise RuntimeError("Job-Konfiguration ist veraltet")
         config = ClusterConfig.model_validate(cluster.config)
         workspace = settings.data_root / "clusters" / config.id
-        if job.kind in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY, JobKind.MANIFEST_DELETE):
+        if is_manifest_job(job.kind):
             execute_manifest_job(job, cluster, workspace)
             return
         # Refresh generated inputs and IaC sources so existing clusters also pick
@@ -242,14 +344,22 @@ def execute(job_id: str) -> None:
                     cluster.status = ClusterStatus.APPLYING
                     db.commit()
             run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "tfplan"], terraform_dir, env, secrets)
-            wait_for_ssh(job, config)
-            run_command(job, ["ansible-playbook", "-i", "inventory.generated.yml", "site.yml"], ansible_dir, env, secrets)
-            if config.addons.ingress.enabled:
-                run_command(job, ["helm", "repo", "add", "traefik", "https://traefik.github.io/charts", "--force-update"], workspace, env, secrets)
-                run_command(job, ["helm", "repo", "update"], workspace, env, secrets)
-                run_command(job, ["helm", "upgrade", "--install", "traefik", "traefik/traefik", "--namespace", "traefik", "--create-namespace", "-f", str(workspace / "generated" / "traefik-values.yaml"), "--kubeconfig", str(kubeconfig)], workspace, env, secrets)
-                run_command(job, ["ansible-playbook", "-i", "inventory.generated.yml", "playbooks/02-loadbalancer.yml"], ansible_dir, env, secrets)
-            verify_cluster(job, workspace, env, secrets)
+            run_ansible_stack(job, config, workspace, ansible_dir, kubeconfig, env, secrets)
+            with SessionLocal() as db:
+                cluster = db.get(Cluster, config.id)
+                if cluster:
+                    cluster.status = ClusterStatus.READY
+                    db.commit()
+            return
+
+        if job.kind == JobKind.ANSIBLE:
+            with SessionLocal() as db:
+                cluster = db.get(Cluster, config.id)
+                if cluster:
+                    cluster.status = ClusterStatus.APPLYING
+                    db.commit()
+            append_log(job.id, "Ansible/Helm/Verify wird ohne Terraform erneut ausgefuehrt.\n")
+            run_ansible_stack(job, config, workspace, ansible_dir, kubeconfig, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
@@ -366,8 +476,41 @@ def claim_job() -> str | None:
             return None
         job.status = JobStatus.RUNNING
         job.started_at = datetime.now(UTC)
+        job.heartbeat_at = job.started_at
         db.commit()
         return job.id
+
+
+def fail_running_job(db, job: Job, reason: str) -> None:
+    now = datetime.now(UTC)
+    job.status = JobStatus.FAILED
+    job.error = reason
+    job.finished_at = now
+    job.heartbeat_at = now
+    job.log = (job.log or "") + f"\nFEHLER: {reason}\n"
+    if not is_manifest_job(job.kind):
+        cluster = db.get(Cluster, job.cluster_id)
+        if cluster:
+            cluster.status = ClusterStatus.FAILED
+
+
+def recover_interrupted_jobs() -> None:
+    with SessionLocal() as db:
+        jobs = db.scalars(select(Job).where(Job.status == JobStatus.RUNNING)).all()
+        for job in jobs:
+            fail_running_job(db, job, "Worker wurde neu gestartet, waehrend dieser Job lief. Bitte Job erneut starten.")
+        db.commit()
+
+
+def recover_stale_running_jobs() -> None:
+    cutoff = datetime.now(UTC) - timedelta(minutes=settings.stale_job_timeout_minutes)
+    with SessionLocal() as db:
+        jobs = db.scalars(select(Job).where(Job.status == JobStatus.RUNNING)).all()
+        for job in jobs:
+            last_seen = job.heartbeat_at or job.started_at or job.created_at
+            if last_seen and last_seen < cutoff:
+                fail_running_job(db, job, f"Job hatte seit mehr als {settings.stale_job_timeout_minutes} Minuten keinen Worker-Heartbeat.")
+        db.commit()
 
 
 def finish_job(job_id: str, error: Exception | None = None) -> None:
@@ -376,6 +519,7 @@ def finish_job(job_id: str, error: Exception | None = None) -> None:
         if not job:
             return
         job.finished_at = datetime.now(UTC)
+        job.heartbeat_at = job.finished_at
         if isinstance(error, JobCancelled):
             job.status = JobStatus.CANCELLED
             job.error = str(error)
@@ -386,7 +530,7 @@ def finish_job(job_id: str, error: Exception | None = None) -> None:
         elif error:
             job.status = JobStatus.FAILED
             job.error = redact(str(error))
-            if job.kind not in (JobKind.MANIFEST_VALIDATE, JobKind.MANIFEST_DIFF, JobKind.MANIFEST_APPLY, JobKind.MANIFEST_DELETE):
+            if not is_manifest_job(job.kind):
                 cluster = db.get(Cluster, job.cluster_id)
                 if cluster:
                     cluster.status = ClusterStatus.FAILED
@@ -396,7 +540,9 @@ def finish_job(job_id: str, error: Exception | None = None) -> None:
 
 
 def main() -> None:
+    recover_interrupted_jobs()
     while True:
+        recover_stale_running_jobs()
         job_id = claim_job()
         if not job_id:
             time.sleep(settings.worker_poll_seconds)
@@ -406,6 +552,9 @@ def main() -> None:
         except Exception as exc:  # worker boundary: persist every failure
             label = "ABGEBROCHEN" if isinstance(exc, JobCancelled) else "FEHLER"
             append_log(job_id, f"\n{label}: {exc}\n")
+            summary = failure_summary(exc, job_log_tail(job_id))
+            if summary:
+                append_log(job_id, summary + "\n")
             finish_job(job_id, exc)
         else:
             finish_job(job_id)

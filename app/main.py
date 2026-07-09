@@ -357,8 +357,15 @@ def cluster_detail(cluster_id: str, request: Request, _: User = Depends(current_
     if not cluster:
         raise HTTPException(404)
     jobs = db.scalars(select(Job).where(Job.cluster_id == cluster.id).order_by(Job.created_at.desc())).all()
-    kubeconfig_available = (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file()
-    return templates.TemplateResponse(request, "cluster.html", {"cluster": cluster, "jobs": jobs, "kubeconfig_available": kubeconfig_available})
+    workspace = settings.data_root / "clusters" / cluster.id
+    kubeconfig_available = (workspace / "kubeconfig").is_file()
+    terraform_state_available = (workspace / "terraform" / "terraform.tfstate").is_file()
+    return templates.TemplateResponse(request, "cluster.html", {
+        "cluster": cluster,
+        "jobs": jobs,
+        "kubeconfig_available": kubeconfig_available,
+        "terraform_state_available": terraform_state_available,
+    })
 
 
 @app.get("/clusters/{cluster_id}/terminal", response_class=HTMLResponse)
@@ -560,6 +567,29 @@ def start_manifest_job(
     return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}", status_code=303)
 
 
+@app.post("/clusters/{cluster_id}/applications/{bundle_id}/revisions/prune")
+def prune_manifest_revisions(cluster_id: str, bundle_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    bundle = db.get(ApplicationBundle, bundle_id)
+    if not bundle or bundle.cluster_id != cluster_id:
+        raise HTTPException(404)
+    revisions = db.scalars(select(ManifestRevision).where(ManifestRevision.bundle_id == bundle.id).order_by(ManifestRevision.version.desc())).all()
+    keep_ids = {revision.id for revision in revisions[: settings.manifest_revision_retention_keep]}
+    referenced_ids = {
+        str(job.payload.get("revision_id"))
+        for job in db.scalars(select(Job).where(Job.cluster_id == cluster_id)).all()
+        if job.payload.get("revision_id")
+    }
+    removed = 0
+    for revision in revisions:
+        if revision.id in keep_ids or revision.id in referenced_ids:
+            continue
+        db.delete(revision)
+        removed += 1
+    db.add(AuditEvent(action="prune_manifest_revisions", object_type="application", object_id=bundle.id, details={"removed": removed, "keep": settings.manifest_revision_retention_keep}))
+    db.commit()
+    return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}", status_code=303)
+
+
 @app.websocket("/ws/clusters/{cluster_id}/kubectl")
 async def kubectl_websocket(websocket: WebSocket, cluster_id: str):
     user_id = websocket.session.get("user_id")
@@ -654,12 +684,14 @@ def start_job(cluster_id: str, kind: JobKind, destroy_confirmation: str = Form("
     cluster = db.get(Cluster, cluster_id)
     if not cluster:
         raise HTTPException(404)
-    if kind not in (JobKind.PLAN, JobKind.APPLY, JobKind.VERIFY, JobKind.DESTROY_PLAN, JobKind.DESTROY):
+    if kind not in (JobKind.PLAN, JobKind.APPLY, JobKind.ANSIBLE, JobKind.VERIFY, JobKind.DESTROY_PLAN, JobKind.DESTROY):
         raise HTTPException(404)
     if kind in (JobKind.DESTROY_PLAN, JobKind.DESTROY) and destroy_confirmation != cluster.name:
         raise HTTPException(400, "Zur Bestätigung muss der Clustername eingegeben werden")
     if kind == JobKind.VERIFY and not (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file():
         raise HTTPException(409, "Clusterprüfung ist erst nach einem erfolgreichen Apply mit erzeugter Kubeconfig möglich")
+    if kind == JobKind.ANSIBLE and not (settings.data_root / "clusters" / cluster.id / "terraform" / "terraform.tfstate").is_file():
+        raise HTTPException(409, "Ansible kann erst erneut ausgefuehrt werden, wenn Terraform bereits VMs angelegt hat")
     try:
         queue_job(db, cluster, kind)
     except ValueError as exc:
@@ -675,6 +707,25 @@ def job_status(job_id: str, _: User = Depends(current_user), db: Session = Depen
     return JSONResponse({"id": job.id, "kind": job.kind.value, "status": job.status.value, "log": job.log, "error": job.error})
 
 
+@app.post("/clusters/{cluster_id}/prune-jobs")
+def prune_cluster_jobs(cluster_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)):
+    cluster = db.get(Cluster, cluster_id)
+    if not cluster:
+        raise HTTPException(404)
+    jobs = db.scalars(select(Job).where(Job.cluster_id == cluster_id).order_by(Job.created_at.desc())).all()
+    finished = [job for job in jobs if job.status not in (JobStatus.QUEUED, JobStatus.RUNNING)]
+    keep_ids = {job.id for job in finished[: settings.job_retention_keep]}
+    removed = 0
+    for job in finished:
+        if job.id in keep_ids:
+            continue
+        db.delete(job)
+        removed += 1
+    db.add(AuditEvent(action="prune_cluster_jobs", object_type="cluster", object_id=cluster_id, details={"removed": removed, "keep": settings.job_retention_keep}))
+    db.commit()
+    return RedirectResponse(f"/clusters/{cluster_id}", status_code=303)
+
+
 @app.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)):
     job = db.get(Job, job_id)
@@ -688,6 +739,19 @@ def cancel_job(job_id: str, _: User = Depends(current_user), db: Session = Depen
     return RedirectResponse(f"/clusters/{job.cluster_id}", status_code=303)
 
 
+def present_cluster_vm_ids(db: Session, cluster: Cluster) -> list[int]:
+    proxmox_config = cluster.config.get("proxmox", {})
+    payload = credential_payload(db, str(proxmox_config.get("credential_ref", "")), CredentialKind.PROXMOX)
+    discovery = ProxmoxClient(
+        str(proxmox_config.get("endpoint", "")),
+        payload["api_token"],
+        bool(proxmox_config.get("verify_tls", True)),
+    ).discover()
+    existing_ids = {int(vm["vmid"]) for vm in discovery.get("vms", []) if vm.get("vmid") is not None}
+    cluster_ids = {int(node["vm_id"]) for node in cluster.config.get("nodes", [])}
+    return sorted(cluster_ids & existing_ids)
+
+
 @app.post("/clusters/{cluster_id}/delete")
 def delete_cluster_record(
     cluster_id: str,
@@ -698,13 +762,18 @@ def delete_cluster_record(
     cluster = db.get(Cluster, cluster_id)
     if not cluster:
         raise HTTPException(404)
-    if cluster.status.value != "destroyed":
-        raise HTTPException(409, "Der Builder-Eintrag kann erst nach erfolgreichem Infrastruktur-Destroy gelöscht werden")
     if delete_confirmation != cluster.name:
         raise HTTPException(400, "Zur Bestätigung muss der Clustername eingegeben werden")
     active = db.scalar(select(Job).where(Job.cluster_id == cluster_id, Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING])))
     if active:
         raise HTTPException(409, "Cluster kann während eines laufenden Jobs nicht gelöscht werden")
+    if cluster.status != ClusterStatus.DESTROYED:
+        try:
+            present_ids = present_cluster_vm_ids(db, cluster)
+        except (ValueError, ProxmoxError) as exc:
+            raise HTTPException(409, "VM-Existenz konnte nicht gegen Proxmox geprüft werden: " + str(exc)) from exc
+        if present_ids:
+            raise HTTPException(409, "Builder-Eintrag ist geschuetzt, weil diese VM-IDs noch in Proxmox existieren: " + ", ".join(map(str, present_ids)))
     clusters_root = (settings.data_root / "clusters").resolve()
     workspace = (clusters_root / cluster.id).resolve()
     if workspace.parent != clusters_root:

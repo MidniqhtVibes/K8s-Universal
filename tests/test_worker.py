@@ -52,3 +52,21 @@ def test_manifest_apply_logs_ingress_test_commands():
     assert "Funktionstest ueber die Cluster-VIP:" in worker
     assert "commands = ingress_test_commands(documents, api_vip)" in worker
     assert "Kein Ingress-Host im Bundle gefunden" in worker
+
+
+def test_worker_recovers_stale_jobs_and_supports_ansible_rerun():
+    project = Path(__file__).parents[1]
+    worker = (project / "app/worker.py").read_text(encoding="utf-8")
+    models = (project / "app/models.py").read_text(encoding="utf-8")
+    migration = (project / "migrations/versions/0005_job_recovery_ansible.py").read_text(encoding="utf-8")
+
+    assert 'ANSIBLE = "ansible"' in models
+    assert "heartbeat_at" in models
+    assert "ALTER TYPE jobkind ADD VALUE IF NOT EXISTS 'ANSIBLE'" in migration
+    assert "op.add_column(\"jobs\", sa.Column(\"heartbeat_at\"" in migration
+    assert "def recover_interrupted_jobs()" in worker
+    assert "def recover_stale_running_jobs()" in worker
+    assert "recover_interrupted_jobs()" in worker
+    assert "JobKind.ANSIBLE" in worker
+    assert "Ansible/Helm/Verify wird ohne Terraform erneut ausgefuehrt." in worker
+    assert "Kurzdiagnose:" in worker

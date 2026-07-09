@@ -10,8 +10,12 @@ def test_sidebar_has_collapsible_cluster_section_and_bottom_admin_links():
     assert 'data-sidebar-section="clusters"' in base
     assert '<summary class="sidebar-summary' in base
     assert 'class="new-cluster-link' in base
+    assert base.index('class="new-cluster-link') > base.index('</details>')
     assert 'class="sidebar-bottom"' in base
     assert '/credentials' in base and '/settings' in base
+    assert '<span class="nav-icon">C</span>\n          <span class="nav-text">Credentials</span>' in base
+    assert '<span class="nav-icon">E</span>\n          <span class="nav-text">Einstellungen</span>' in base
+    assert '<span class="nav-icon">O</span>' not in base
     assert '/static/sidebar.js' in base
 
     assert "body.sidebar-collapsed" in css

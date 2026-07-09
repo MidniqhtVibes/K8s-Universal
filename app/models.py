@@ -29,6 +29,7 @@ class ClusterStatus(str, enum.Enum):
 class JobKind(str, enum.Enum):
     PLAN = "plan"
     APPLY = "apply"
+    ANSIBLE = "ansible"
     VERIFY = "verify"
     DESTROY_PLAN = "destroy_plan"
     DESTROY = "destroy"
@@ -94,6 +95,7 @@ class Job(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cluster: Mapped[Cluster] = relationship(back_populates="jobs")
 

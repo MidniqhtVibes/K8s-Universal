@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     ssh_wait_timeout: int = Field(default=900, ge=30)
     terraform_parallelism: int = Field(default=2, ge=1, le=32)
     ansible_forks: int = Field(default=4, ge=1, le=50)
+    stale_job_timeout_minutes: int = Field(default=60, ge=5, le=1440)
+    job_retention_keep: int = Field(default=100, ge=10, le=1000)
+    manifest_revision_retention_keep: int = Field(default=30, ge=5, le=500)
 
 
 @lru_cache

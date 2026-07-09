@@ -69,7 +69,10 @@
 </div>
 
 <section class="card revision-panel">
-  <h2>Revisionen</h2>
+  <div class="row">
+    <h2>Revisionen</h2>
+    <form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/revisions/prune" onsubmit="return confirm('Alte nicht referenzierte Revisionen aufraeumen?')"><button class="secondary">Revisionen aufraeumen</button></form>
+  </div>
   <div class="revision-list vertical">
     {% for revision in revisions %}
     <div class="revision">
