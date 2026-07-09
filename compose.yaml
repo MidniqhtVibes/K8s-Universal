@@ -15,7 +15,9 @@ services:
     restart: unless-stopped
 
   web:
-    build: .
+    build:
+      context: .
+      target: web
     env_file: ${BUILDER_ENV_FILE:-.env}
     environment:
       DATABASE_URL: postgresql+psycopg://clusterbuilder:${POSTGRES_PASSWORD}@postgres/clusterbuilder
@@ -30,15 +32,16 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).read()"]
       interval: 10s
       timeout: 3s
       retries: 10
     restart: unless-stopped
 
   worker:
-    build: .
-    command: ["python", "-m", "app.worker"]
+    build:
+      context: .
+      target: worker
     env_file: ${BUILDER_ENV_FILE:-.env}
     environment:
       DATABASE_URL: postgresql+psycopg://clusterbuilder:${POSTGRES_PASSWORD}@postgres/clusterbuilder
@@ -51,6 +54,20 @@ services:
       web:
         condition: service_healthy
     restart: unless-stopped
+
+  test:
+    profiles: ["test"]
+    build:
+      context: .
+      target: test
+    command: ["pytest", "-q"]
+    environment:
+      DATABASE_URL: sqlite:////tmp/cluster-builder-tests.db
+      MASTER_KEY: test-master-key-that-is-never-used-in-production
+      SESSION_SECRET: test-session-secret-that-is-never-used-in-production
+      INITIAL_ADMIN_PASSWORD: test-admin-password
+      DATA_ROOT: /tmp/cluster-builder-data
+      SOURCE_ROOT: /workspace
 
 volumes:
   postgres-data:

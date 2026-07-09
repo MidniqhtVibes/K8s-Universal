@@ -14,7 +14,7 @@ builder-logs:
 	docker compose logs -f web worker
 
 builder-test:
-	docker compose run --rm --no-deps web pytest -q
+	docker compose --profile test run --rm --no-deps --build test
 
 render:
 	$(PYTHON) -m app.cli render --config $(CONFIG) --output $(RUNTIME) --source .
