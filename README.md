@@ -22,6 +22,49 @@ Webbasierter Builder fuer HA-Kubernetes-Cluster auf Proxmox. Die Anwendung erzeu
 - Freie IP-Adressen und VM-IDs fuer Load Balancer, Control Planes und Worker
 - Netzwerkzugriff von Builder/Worker zu Proxmox und von den VMs ins Internet
 
+## Proxmox-Template vorbereiten
+
+Das Release enthaelt mit `proxmox/create-template.sh` ein einmaliges
+Host-Setupwerkzeug. Es wird direkt als `root` auf genau dem Proxmox-Node
+ausgefuehrt, der spaeter im Wizard ausgewaehlt wird. Es laeuft nicht im
+Builder-Container und wird weder von der Webanwendung noch von Ansible
+automatisch gestartet.
+
+Das Skript laedt ein offizielles Ubuntu-Cloud-Image ueber HTTPS, prueft dessen
+SHA-256-Wert, installiert Cloud-Init, SSH und den QEMU Guest Agent und erzeugt
+daraus ein QEMU-Template. Die VM-ID besitzt keinen festen Standardwert und muss
+im gesamten Proxmox-Cluster frei sein. Vorhandene VMs werden nicht
+ueberschrieben.
+
+Das Skript zuerst aus dem geklonten Release auf den Zielnode kopieren:
+
+```bash
+scp proxmox/create-template.sh root@pve-node:/root/create-template.sh
+ssh root@pve-node
+```
+
+Danach auf dem Proxmox-Host ausfuehren. `9100` ist hier nur eine Beispiel-ID:
+
+```bash
+bash /root/create-template.sh \
+  --vm-id 9100 \
+  --storage local-lvm \
+  --bridge vmbr0 \
+  --ubuntu-release noble \
+  --install-dependencies
+```
+
+Ohne `--install-dependencies` veraendert das Skript keine Hostpakete und bricht
+bei fehlenden Werkzeugen mit einer Erklaerung ab. Alle Optionen zeigt:
+
+```bash
+bash /root/create-template.sh --help
+```
+
+Nach erfolgreichem Abschluss in der Weboberflaeche **Proxmox-Ressourcen
+erkennen** ausfuehren und exakt den Zielnode sowie die ausgegebene Template-VM-ID
+auswaehlen. Diese ID darf nicht erneut fuer eine Cluster-VM vergeben werden.
+
 ## Setup
 
 1. Repository klonen oder aktualisieren:

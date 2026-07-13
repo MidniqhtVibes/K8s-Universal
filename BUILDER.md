@@ -10,6 +10,50 @@ Der Cluster Builder ist die Weboberfläche für dieses Repository. Er verwaltet 
 - reservierte Node-IP-Adressen und eine freie API-VIP
 - VRRP zwischen den Load-Balancern muss im Netzwerk erlaubt sein
 
+## Einmaliges Proxmox-Host-Setup
+
+`proxmox/create-template.sh` ist Bestandteil des Releases, aber bewusst kein
+CLI-Zugang zur Webanwendung. Es bereitet ausschliesslich die externe
+Proxmox-Voraussetzung vor, aus der Terraform spaeter die VMs klont. Das Skript
+wird niemals von Web, Worker, Docker Compose oder Ansible ausgefuehrt.
+
+Es muss als `root` direkt auf dem Proxmox-Host laufen, der im Wizard als Node
+ausgewaehlt wird:
+
+```bash
+bash proxmox/create-template.sh \
+  --vm-id 9100 \
+  --storage local-lvm \
+  --bridge vmbr0 \
+  --ubuntu-release noble \
+  --install-dependencies
+```
+
+Die VM-ID `9100` ist nur ein Beispiel und kein Default. `--vm-id` ist ein
+Pflichtwert, wird clusterweit auf Kollisionen geprueft und darf anschliessend
+nicht fuer eine Node-VM verwendet werden. `--storage` muss QEMU-Images und eine
+Cloud-Init-Disk aufnehmen koennen; `--bridge` muss auf dem lokalen Node
+existieren. Standardmaessig wird Ubuntu 24.04 (`noble`) verwendet. Ubuntu 22.04
+(`jammy`) ist ebenfalls waehlbar.
+
+Der Ablauf ist absichtlich defensiv:
+
+1. Proxmox-Host, lokaler Node, Storage, Bridge und freie VM-ID pruefen.
+2. Geplante Werte anzeigen und die VM-ID interaktiv bestaetigen.
+3. Das Ubuntu-Image nur per HTTPS laden und gegen `SHA256SUMS` pruefen.
+4. Cloud-Init, OpenSSH, sudo und QEMU Guest Agent im Image vorbereiten.
+5. Systemdisk als `scsi0`, Cloud-Init-Disk und VirtIO-Netz konfigurieren.
+6. Erst nach erneuter Konfigurationspruefung `qm template` ausfuehren.
+
+Es gibt kein `--force` und keinen automatischen Loeschpfad. Scheitert der Lauf
+nach `qm create`, bleibt die unvollstaendige VM zur manuellen Untersuchung
+erhalten. Fehlende Hostwerkzeuge werden nur mit dem ausdruecklichen Schalter
+`--install-dependencies` installiert. Weitere Parameter zeigt
+`bash proxmox/create-template.sh --help`.
+
+Nach der Erstellung muss die Web-Discovery aufgerufen und dort genau das QEMU-
+Template mit der ausgegebenen ID auf demselben Node ausgewaehlt werden.
+
 ## Installation
 
 ```bash

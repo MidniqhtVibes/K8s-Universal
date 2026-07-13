@@ -6,7 +6,6 @@ let discoveryData = null;
 proxmoxCredential?.addEventListener('change', () => {
   const option = proxmoxCredential.selectedOptions[0];
   document.querySelector('#proxmox-endpoint').value = option?.dataset.endpoint || '';
-  document.querySelector('#proxmox-verify-tls').checked = option?.dataset.verifyTls !== 'false';
 });
 sshCredential?.addEventListener('change', () => {
   const option = sshCredential.selectedOptions[0];

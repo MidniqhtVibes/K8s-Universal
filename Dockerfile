@@ -104,6 +104,9 @@ FROM worker-base AS test
 COPY requirements.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir --no-compile -r requirements-dev.txt
 COPY tests tests
+COPY README.md BUILDER.md Dockerfile ./
+COPY .gitattributes ./
+COPY proxmox proxmox
 
 CMD ["pytest", "-q"]
 

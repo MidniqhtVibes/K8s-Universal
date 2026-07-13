@@ -24,8 +24,11 @@ def test_proxmox_connection_is_credential_owned_and_discovery_is_node_scoped():
     javascript = (project / "app/static/wizard.js").read_text(encoding="utf-8")
 
     assert 'id="proxmox-endpoint"' in wizard and "readonly required" in wizard
-    assert 'data-verify-tls=' in wizard
+    assert 'data-verify-tls=' not in wizard
+    assert 'id="proxmox-verify-tls"' not in wizard
     assert 'name="verify_tls"' not in wizard
+    assert "verifyTls" not in javascript
+    assert "proxmox-verify-tls" not in javascript
     assert "item.type === 'qemu' && item.node === selectedNode" in javascript
     assert "availableNodes.has(proxmoxNode.value)" in javascript
     assert "proxmoxNode?.addEventListener('change'" in javascript
