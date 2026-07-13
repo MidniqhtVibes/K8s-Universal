@@ -12,7 +12,7 @@ CONNECTION_FLAGS = {
     "--kubeconfig", "--server", "--token", "--certificate-authority",
     "--client-certificate", "--client-key", "--username", "--password",
 }
-SHELL_TOKENS = re.compile(r"(^|\s)(\||&&|;|>|<|`|\$\()")
+SHELL_TOKENS = re.compile(r"(\||&&|;|>|<|`|\$\()")
 
 
 @dataclass(frozen=True)
