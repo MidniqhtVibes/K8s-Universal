@@ -1,5 +1,8 @@
 const sidebarToggle = document.querySelector('#sidebar-toggle');
 const clusterSection = document.querySelector('[data-sidebar-section="clusters"]');
+const mobileNavToggle = document.querySelector('#mobile-nav-toggle');
+const sidebarBackdrop = document.querySelector('#sidebar-backdrop');
+const sidebar = document.querySelector('#app-sidebar');
 const collapsedKey = 'cluster-builder-sidebar-collapsed';
 const clustersOpenKey = 'cluster-builder-clusters-open';
 
@@ -26,3 +29,32 @@ sidebarToggle?.addEventListener('click', () => {
   setCollapsed(collapsed);
   localStorage.setItem(collapsedKey, collapsed ? '1' : '0');
 });
+
+const setMobileOpen = open => {
+  document.body.classList.toggle('sidebar-open', open);
+  mobileNavToggle?.setAttribute('aria-expanded', String(open));
+  mobileNavToggle?.setAttribute('aria-label', open ? 'Navigation schließen' : 'Navigation öffnen');
+};
+
+mobileNavToggle?.addEventListener('click', () => {
+  setMobileOpen(!document.body.classList.contains('sidebar-open'));
+});
+
+sidebarBackdrop?.addEventListener('click', () => setMobileOpen(false));
+
+sidebar?.addEventListener('click', event => {
+  if (event.target.closest('a') && window.matchMedia('(max-width: 860px)').matches) {
+    setMobileOpen(false);
+  }
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') setMobileOpen(false);
+});
+
+const desktopMedia = window.matchMedia('(min-width: 861px)');
+const closeMobileNavigation = event => {
+  if (event.matches) setMobileOpen(false);
+};
+if (desktopMedia.addEventListener) desktopMedia.addEventListener('change', closeMobileNavigation);
+else desktopMedia.addListener(closeMobileNavigation);

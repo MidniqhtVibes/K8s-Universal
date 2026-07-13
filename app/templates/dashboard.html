@@ -1,12 +1,60 @@
 {% extends "base.html" %}
-{% block content %}
-<div class="page-head"><div><h1>Cluster</h1><p class="muted">Gewünschte und aktuelle Infrastrukturzustände</p></div><a class="button" href="/clusters/new">Neuen Cluster konfigurieren</a></div>
-<div class="grid cards">
-{% for cluster in clusters %}
-  <a class="card cluster-card" href="/clusters/{{ cluster.id }}"><div class="row"><h2>{{ cluster.name }}</h2><span class="badge {{ cluster.status.value }}">{{ cluster.status.value }}</span></div><p>{{ cluster.config.nodes|length }} VMs · {{ cluster.config.proxmox.node }} · {{ cluster.config.network.cidr }}</p><small>Aktualisiert {{ cluster.updated_at.strftime('%d.%m.%Y %H:%M') }}</small></a>
-{% else %}
-  <div class="card empty"><h2>Noch kein Cluster</h2><p>Lege Credentials an und starte danach den Assistenten.</p><a href="/credentials">Credentials verwalten</a></div>
-{% endfor %}
-</div>
-{% endblock %}
+{% import "_macros.html" as ui %}
 
+{% block title %}Übersicht · K8s Universal{% endblock %}
+{% block breadcrumb %}Übersicht{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div class="page-heading">
+    <p class="eyebrow">Infrastruktur</p>
+    <div class="page-title-row">
+      <h1>Cluster-Übersicht</h1>
+    </div>
+    <p class="page-subtitle">Gewünschte und aktuelle Infrastrukturzustände zentral verwalten.</p>
+  </div>
+  <div class="page-actions">
+    <a class="button" href="/clusters/new">{{ ui.icon('plus') }}<span>Neuen Cluster konfigurieren</span></a>
+  </div>
+</header>
+
+{% if clusters %}
+<section class="grid cards cluster-grid" aria-label="Konfigurierte Cluster">
+  {% for cluster in clusters %}
+  <a class="card cluster-card" href="/clusters/{{ cluster.id }}">
+    <div class="card-header">
+      <div class="cluster-card-heading">
+        <span class="cluster-card-icon">{{ ui.icon('cluster') }}</span>
+        <div>
+          <h2>{{ cluster.name }}</h2>
+          <p>{{ cluster.config.proxmox.node }}</p>
+        </div>
+      </div>
+      {{ ui.cluster_status(cluster.status.value) }}
+    </div>
+    <div class="cluster-card-metrics">
+      <span>{{ ui.icon('cube') }}<strong>{{ cluster.config.nodes|length }}</strong> VMs</span>
+      <span>{{ ui.icon('network') }}{{ cluster.config.network.cidr }}</span>
+    </div>
+    <footer class="cluster-card-footer">
+      <small>Aktualisiert am {{ cluster.updated_at.strftime('%d.%m.%Y um %H:%M') }} Uhr</small>
+      <span class="cluster-card-link">Cluster öffnen {{ ui.icon('chevron-left', 'icon-rotate-180') }}</span>
+    </footer>
+  </a>
+  {% endfor %}
+</section>
+{% else %}
+<section class="card empty-state">
+  <span class="empty-state-icon">{{ ui.icon('cluster') }}</span>
+  <div>
+    <p class="eyebrow">Erste Schritte</p>
+    <h2>Noch kein Cluster</h2>
+    <p>Lege zuerst die benötigten Credentials an und starte danach den Konfigurationsassistenten.</p>
+  </div>
+  <div class="page-actions">
+    <a class="button secondary" href="/credentials">{{ ui.icon('key') }}<span>Credentials verwalten</span></a>
+    <a class="button" href="/clusters/new">{{ ui.icon('plus') }}<span>Cluster konfigurieren</span></a>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

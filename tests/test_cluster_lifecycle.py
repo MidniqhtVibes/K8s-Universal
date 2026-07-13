@@ -28,9 +28,9 @@ def test_cluster_lifecycle_has_ansible_rerun_safe_delete_and_retention_controls(
     assert '@app.post("/clusters/{cluster_id}/applications/{bundle_id}/revisions/prune")' in main
 
     assert "/jobs/ansible" in cluster_template
-    assert "Ansible erneut ausfuehren" in cluster_template
+    assert "Ansible konfigurieren" in cluster_template
     assert "/prune-jobs" in cluster_template
-    assert "VMs bereits ausserhalb des Builders geloescht" in cluster_template
+    assert "VMs bereits außerhalb des Builders gelöscht" in cluster_template
     assert "/revisions/prune" in application_template
 
     assert "job_retention_keep" in config

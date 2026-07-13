@@ -1,17 +1,64 @@
 {% extends "base.html" %}
+{% import "_macros.html" as ui %}
+
 {% block title %}Terminal · {{ cluster.name }}{% endblock %}
+{% block breadcrumb %}{{ cluster.name }} · Terminal{% endblock %}
+
 {% block content %}
-<div class="page-head"><div><h1>kubectl Terminal</h1><p class="muted">Cluster: {{ cluster.name }} · Befehle werden protokolliert</p></div><a class="button secondary" href="/clusters/{{ cluster.id }}">Zur Übersicht</a></div>
+<header class="page-header">
+  <div class="page-heading">
+    <span class="eyebrow">{{ ui.icon('terminal') }} Cluster-Konsole</span>
+    <h1>kubectl Terminal</h1>
+    <p class="page-subtitle">Direkter, protokollierter Zugriff auf <strong>{{ cluster.name }}</strong></p>
+  </div>
+  <div class="page-actions">
+    <a class="button secondary" href="/clusters/{{ cluster.id }}">{{ ui.icon('arrow-left') }} Clusterübersicht</a>
+  </div>
+</header>
+
 {% if not kubeconfig_available %}
-<div class="error">Das Terminal wird verfügbar, sobald ein erfolgreicher Apply die Kubeconfig erzeugt hat.</div>
+<div class="alert alert-info terminal-unavailable">
+  {{ ui.icon('info') }}
+  <div>
+    <strong>Terminal noch nicht verfügbar</strong>
+    <p>Sobald ein erfolgreicher Apply die Kubeconfig erzeugt hat, wird die Cluster-Konsole automatisch freigeschaltet.</p>
+  </div>
+</div>
 {% else %}
-<section class="card terminal-card">
-  <div class="terminal-toolbar"><span><span class="terminal-status" id="terminal-status"></span> Clusterverbindung</span><label class="admin-toggle"><input type="checkbox" id="admin-mode"> Mutierende Befehle erlauben</label></div>
-  <div id="terminal" data-cluster-id="{{ cluster.id }}"></div>
-  <p class="muted terminal-help">Eingabe ohne vorangestelltes <code>kubectl</code> möglich · <kbd>Ctrl</kbd>+<kbd>C</kbd> bricht laufende Befehle ab · Interaktive TTY-Befehle sind gesperrt.</p>
+<section class="card terminal-card" aria-labelledby="terminal-heading">
+  <div class="terminal-toolbar">
+    <div class="terminal-connection">
+      <span class="terminal-status" id="terminal-status"></span>
+      <div>
+        <strong id="terminal-heading">Clusterverbindung</strong>
+        <small>{{ cluster.name }} · Kubernetes API</small>
+      </div>
+    </div>
+    <label class="admin-toggle" for="admin-mode">
+      <span>
+        <strong>Administrationsmodus</strong>
+        <small>Mutierende Befehle erlauben</small>
+      </span>
+      <input type="checkbox" id="admin-mode">
+    </label>
+  </div>
+
+  <div class="terminal-frame">
+    <div class="terminal-frame-header" aria-hidden="true">
+      <span></span><span></span><span></span>
+      <small>kubectl · {{ cluster.name }}</small>
+    </div>
+    <div id="terminal" data-cluster-id="{{ cluster.id }}"></div>
+  </div>
+
+  <div class="terminal-help">
+    {{ ui.icon('info') }}
+    <p>Eingaben sind ohne vorangestelltes <code>kubectl</code> möglich. <kbd>Ctrl</kbd>+<kbd>C</kbd> bricht laufende Befehle ab. Interaktive TTY-Befehle sind gesperrt.</p>
+  </div>
 </section>
 {% endif %}
 {% endblock %}
+
 {% block scripts %}
 {% if kubeconfig_available %}<link rel="stylesheet" href="/static/vendor/xterm.css"><script src="/static/vendor/xterm.js"></script><script src="/static/vendor/xterm-addon-fit.js"></script><script src="/static/terminal.js"></script>{% endif %}
 {% endblock %}

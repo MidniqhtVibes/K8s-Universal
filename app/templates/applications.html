@@ -1,42 +1,85 @@
 {% extends "base.html" %}
-{% block title %}Anwendungen - {{ cluster.name }}{% endblock %}
+{% import "_macros.html" as ui %}
+
+{% block title %}Anwendungen · {{ cluster.name }}{% endblock %}
+{% block breadcrumb %}{{ cluster.name }} · Anwendungen{% endblock %}
+
 {% block content %}
-<div class="page-head">
-  <div>
+<header class="page-header">
+  <div class="page-heading">
+    <span class="eyebrow">{{ ui.icon('app') }} Cluster-Anwendungen</span>
     <h1>Anwendungen</h1>
-    <p class="muted">Deklarative Kubernetes-Manifeste fuer {{ cluster.name }}</p>
+    <p class="page-subtitle">Verwalte deklarative Kubernetes-Manifeste für <strong>{{ cluster.name }}</strong> an einem zentralen Ort.</p>
   </div>
-  <a class="button secondary" href="/clusters/{{ cluster.id }}">Zur Clusteruebersicht</a>
-</div>
+  <div class="page-actions">
+    <a class="button secondary" href="/clusters/{{ cluster.id }}">{{ ui.icon('arrow-left') }} Clusterübersicht</a>
+  </div>
+</header>
 
-<div class="grid application-grid">
-  {% for bundle in bundles %}
-  <a class="card application-card" href="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}">
-    <div class="row"><h2>{{ bundle.name }}</h2><span class="badge">{{ bundle.files|length }} Dateien</span></div>
-    <p>{{ bundle.description or 'Keine Beschreibung' }}</p>
-    <small>Aktualisiert {{ bundle.updated_at.strftime('%d.%m.%Y %H:%M') }}</small>
-  </a>
-  {% else %}
-  <section class="empty-state">
-    <h2>Noch keine Anwendungen</h2>
-    <p class="muted">Lege eine Anwendung an oder starte mit dem Nginx-Demo-Template.</p>
-  </section>
-  {% endfor %}
-</div>
+<section aria-labelledby="applications-heading">
+  <div class="section-heading">
+    <div>
+      <h2 id="applications-heading">Gespeicherte Anwendungen</h2>
+      <p class="muted">Manifest-Bundles dieses Clusters</p>
+    </div>
+    {% if bundles %}<span class="badge">{{ bundles|length }} Anwendung{% if bundles|length != 1 %}en{% endif %}</span>{% endif %}
+  </div>
 
-<section class="card new-application">
-  <h2>Neue Anwendung</h2>
+  <div class="application-grid">
+    {% for bundle in bundles %}
+    <a class="card application-card" href="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}">
+      <div class="card-header">
+        <span class="application-icon">{{ ui.icon('cube') }}</span>
+        <span class="badge">{{ bundle.files|length }} Datei{% if bundle.files|length != 1 %}en{% endif %}</span>
+      </div>
+      <div class="application-card-body">
+        <h3>{{ bundle.name }}</h3>
+        <p>{{ bundle.description or 'Keine Beschreibung hinterlegt' }}</p>
+      </div>
+      <div class="application-card-footer">
+        <span>{{ ui.icon('clock') }} Aktualisiert {{ bundle.updated_at.strftime('%d.%m.%Y %H:%M') }}</span>
+        <span class="application-card-link">Öffnen ›</span>
+      </div>
+    </a>
+    {% else %}
+    <div class="card empty-state application-empty-state">
+      <span class="empty-state-icon">{{ ui.icon('app') }}</span>
+      <h2>Noch keine Anwendungen</h2>
+      <p>Lege unten deine erste Anwendung an oder starte mit dem vorbereiteten Nginx-Demo-Template.</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card new-application" aria-labelledby="new-application-heading">
+  <div class="card-header">
+    <div>
+      <span class="eyebrow">{{ ui.icon('plus') }} Neues Manifest-Bundle</span>
+      <h2 id="new-application-heading">Anwendung anlegen</h2>
+      <p class="muted">Erzeuge ein Bundle aus einer Vorlage und passe die Manifeste anschließend im Editor an.</p>
+    </div>
+  </div>
   <form method="post" action="/clusters/{{ cluster.id }}/applications" class="form-grid">
-    <label>Name<input name="name" required pattern="[a-z0-9-]+" placeholder="meine-anwendung"></label>
-    <label>Template
+    <label>
+      <span>Name</span>
+      <input name="name" required pattern="[a-z0-9-]+" placeholder="meine-anwendung" autocomplete="off">
+      <small>Nur Kleinbuchstaben, Zahlen und Bindestriche</small>
+    </label>
+    <label>
+      <span>Template</span>
       <select name="template_id">
         {% for id, template in application_templates.items() %}
         <option value="{{ id }}">{{ template.name }}</option>
         {% endfor %}
       </select>
     </label>
-    <label class="wide">Beschreibung<input name="description" placeholder="Zweck der Anwendung"></label>
-    <div class="form-submit"><button>Anwendung anlegen</button></div>
+    <label class="wide">
+      <span>Beschreibung</span>
+      <input name="description" placeholder="Zweck der Anwendung">
+    </label>
+    <div class="form-submit page-actions">
+      <button type="submit" class="button">{{ ui.icon('plus') }} Anwendung anlegen</button>
+    </div>
   </form>
 </section>
 {% endblock %}

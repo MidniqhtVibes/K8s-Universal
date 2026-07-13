@@ -1,0 +1,55 @@
+{% macro icon(name, extra_class='') -%}
+<svg class="icon{% if extra_class %} {{ extra_class }}{% endif %}" aria-hidden="true" focusable="false"><use href="#icon-{{ name }}"></use></svg>
+{%- endmacro %}
+
+{% macro cluster_status(status, with_icon=true) -%}
+{% set labels = {
+  'draft': 'Entwurf',
+  'planned': 'Geplant',
+  'applying': 'Wird erstellt',
+  'ready': 'Bereit',
+  'failed': 'Fehlgeschlagen',
+  'destroyed': 'Zerstört'
+} %}
+<span class="badge status-badge {{ status }}">{% if with_icon %}{{ icon('status-dot') }}{% endif %}<span>{{ labels.get(status, status) }}</span></span>
+{%- endmacro %}
+
+{% macro job_status(status) -%}
+{% set labels = {
+  'queued': 'Wartet',
+  'running': 'Läuft',
+  'succeeded': 'Erfolgreich',
+  'failed': 'Fehlgeschlagen',
+  'cancelled': 'Abgebrochen'
+} %}
+<span class="badge {{ status }} job-status" data-status-label="{{ labels.get(status, status) }}">{{ icon('status-dot') }}<span>{{ labels.get(status, status) }}</span></span>
+{%- endmacro %}
+
+{% macro role_badge(role) -%}
+{% set labels = {
+  'loadbalancer': 'Load Balancer',
+  'control_plane': 'Control Plane',
+  'worker': 'Worker'
+} %}
+<span class="role-badge role-{{ role }}">{{ labels.get(role, role) }}</span>
+{%- endmacro %}
+
+{% macro job_kind(kind) -%}
+{% set labels = {
+  'plan': 'Terraform Plan',
+  'apply': 'Terraform Apply',
+  'ansible': 'Ansible konfigurieren',
+  'verify': 'Cluster prüfen',
+  'destroy_plan': 'Destroy planen',
+  'destroy': 'Infrastruktur zerstören',
+  'manifest_validate': 'Manifest validieren',
+  'manifest_diff': 'Manifest-Diff',
+  'manifest_apply': 'Manifest anwenden',
+  'manifest_delete': 'Manifest entfernen'
+} %}
+{{ labels.get(kind, kind|replace('_', ' ')|title) }}
+{%- endmacro %}
+
+{% macro credential_kind(kind) -%}
+{% if kind == 'proxmox' %}Proxmox API{% elif kind == 'ssh' %}SSH{% else %}{{ kind }}{% endif %}
+{%- endmacro %}

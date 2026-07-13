@@ -1,78 +1,205 @@
 {% extends "base.html" %}
+{% import "_macros.html" as ui %}
+
+{% block title %}{{ cluster.name }} · K8s Universal{% endblock %}
+{% block breadcrumb %}Cluster / {{ cluster.name }}{% endblock %}
+
 {% block content %}
-<div class="page-head">
-  <div>
-    <h1>{{ cluster.name }}</h1>
-    <p class="muted">{{ cluster.config.proxmox.endpoint }} - {{ cluster.config.network.cidr }}</p>
+{% set control_planes = cluster.config.nodes | selectattr('role', 'equalto', 'control_plane') | list %}
+{% set workers = cluster.config.nodes | selectattr('role', 'equalto', 'worker') | list %}
+{% set loadbalancers = cluster.config.nodes | selectattr('role', 'equalto', 'loadbalancer') | list %}
+{% set plan_current = cluster.planned_hash == cluster.config_hash %}
+{% set apply_current = cluster.applied_hash == cluster.config_hash %}
+
+<header class="page-header">
+  <div class="page-heading">
+    <p class="eyebrow">Clusterverwaltung</p>
+    <div class="page-title-row">
+      <h1>{{ cluster.name }}</h1>
+      {{ ui.cluster_status(cluster.status.value) }}
+    </div>
+    <p class="page-subtitle">
+      <span>{{ ui.icon('server') }}{{ cluster.config.proxmox.endpoint }}</span>
+      <span class="subtitle-separator">·</span>
+      <span>{{ ui.icon('network') }}{{ cluster.config.network.cidr }}</span>
+    </p>
   </div>
-  <div class="actions">
-    <a class="button secondary" href="/clusters/{{ cluster.id }}/applications">Anwendungen</a>
-    <a class="button secondary {% if not kubeconfig_available %}disabled-link{% endif %}" href="{% if kubeconfig_available %}/clusters/{{ cluster.id }}/terminal{% else %}#{% endif %}" title="{% if not kubeconfig_available %}Erst nach erfolgreichem Apply verfuegbar{% endif %}">Terminal</a>
-    <a class="button secondary" href="/clusters/{{ cluster.id }}/edit">Bearbeiten</a>
-    <span class="badge {{ cluster.status.value }}">{{ cluster.status.value }}</span>
+  <div class="page-actions">
+    <a class="button secondary" href="/clusters/{{ cluster.id }}/applications">{{ ui.icon('app') }}<span>Anwendungen</span></a>
+    <a class="button secondary {% if not kubeconfig_available %}disabled-link{% endif %}" href="{% if kubeconfig_available %}/clusters/{{ cluster.id }}/terminal{% else %}#{% endif %}" title="{% if not kubeconfig_available %}Erst nach erfolgreichem Apply verfügbar{% endif %}" {% if not kubeconfig_available %}aria-disabled="true"{% endif %}>{{ ui.icon('terminal') }}<span>Terminal</span></a>
+    <a class="button secondary" href="/clusters/{{ cluster.id }}/edit">{{ ui.icon('edit') }}<span>Bearbeiten</span></a>
   </div>
+</header>
+
+<section class="metric-grid" aria-label="Cluster-Kennzahlen">
+  <article class="metric-card">
+    <span class="metric-icon">{{ ui.icon('cube') }}</span>
+    <div><span class="metric-label">Nodes gesamt</span><strong>{{ cluster.config.nodes|length }}</strong><small>Virtuelle Maschinen</small></div>
+  </article>
+  <article class="metric-card">
+    <span class="metric-icon">{{ ui.icon('shield-check') }}</span>
+    <div><span class="metric-label">Control Planes</span><strong>{{ control_planes|length }}</strong><small>Kubernetes-Steuerung</small></div>
+  </article>
+  <article class="metric-card">
+    <span class="metric-icon">{{ ui.icon('server') }}</span>
+    <div><span class="metric-label">Worker</span><strong>{{ workers|length }}</strong><small>Workload-Nodes</small></div>
+  </article>
+  <article class="metric-card">
+    <span class="metric-icon">{{ ui.icon('balance') }}</span>
+    <div><span class="metric-label">Load Balancer</span><strong>{{ loadbalancers|length }}</strong><small>API-Endpunkte</small></div>
+  </article>
+</section>
+
+<div class="cluster-overview-grid">
+  <section class="card nodes-card">
+    <div class="card-header">
+      <div>
+        <p class="eyebrow">Infrastruktur</p>
+        <h2>Nodes</h2>
+      </div>
+      <code title="Hash der aktuellen Konfiguration">{{ cluster.config_hash[:12] }}</code>
+    </div>
+    <div class="table-shell">
+      <table class="data-table">
+        <thead>
+          <tr><th>Name</th><th>Rolle</th><th>VM-ID</th><th>IP-Adresse</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          {% for node in cluster.config.nodes %}
+          <tr>
+            <td data-label="Name"><strong>{{ node.name }}</strong></td>
+            <td data-label="Rolle">{{ ui.role_badge(node.role) }}</td>
+            <td data-label="VM-ID"><code>{{ node.vm_id }}</code></td>
+            <td data-label="IP-Adresse"><code>{{ node.ip }}</code></td>
+            <td data-label="CPU">{{ node.cores }}</td>
+            <td data-label="RAM">{{ node.memory_mb }} MB</td>
+            <td data-label="Disk">{{ node.disk_gb }} GB</td>
+            <td data-label="Status">{{ ui.cluster_status(cluster.status.value) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card lifecycle-card">
+    <div class="card-header">
+      <div>
+        <p class="eyebrow">Bereitstellung</p>
+        <h2>Lifecycle</h2>
+      </div>
+    </div>
+
+    <ol class="lifecycle-list">
+      <li class="lifecycle-step is-complete">
+        <span class="lifecycle-marker">{{ ui.icon('check') }}</span>
+        <div class="lifecycle-content">
+          <div><strong>Konfiguration</strong><small>Clusterdefinition ist gespeichert</small></div>
+        </div>
+      </li>
+      <li class="lifecycle-step {% if plan_current %}is-complete{% else %}is-current{% endif %}">
+        <span class="lifecycle-marker">{% if plan_current %}{{ ui.icon('check') }}{% else %}{{ ui.icon('file') }}{% endif %}</span>
+        <div class="lifecycle-content">
+          <div><strong>Terraform planen</strong><small>{% if plan_current %}Plan ist aktuell{% else %}Änderungen prüfen{% endif %}</small></div>
+          <form method="post" action="/clusters/{{ cluster.id }}/jobs/plan"><button class="button secondary">Planen</button></form>
+        </div>
+      </li>
+      <li class="lifecycle-step {% if apply_current %}is-complete{% elif plan_current %}is-current{% else %}is-locked{% endif %}">
+        <span class="lifecycle-marker">{% if apply_current %}{{ ui.icon('check') }}{% elif plan_current %}{{ ui.icon('clock') }}{% else %}{{ ui.icon('lock') }}{% endif %}</span>
+        <div class="lifecycle-content">
+          <div><strong>Terraform anwenden</strong><small>{% if apply_current %}Infrastruktur ist aktuell{% elif plan_current %}Plan kann angewendet werden{% else %}Aktueller Plan erforderlich{% endif %}</small></div>
+          <form method="post" action="/clusters/{{ cluster.id }}/jobs/apply"><button class="button secondary" {% if cluster.planned_hash != cluster.config_hash %}disabled title="Zuerst aktuellen Plan erstellen"{% endif %}>Anwenden</button></form>
+        </div>
+      </li>
+      <li class="lifecycle-step {% if kubeconfig_available %}is-complete{% elif terraform_state_available %}is-current{% else %}is-locked{% endif %}">
+        <span class="lifecycle-marker">{% if kubeconfig_available %}{{ ui.icon('check') }}{% elif terraform_state_available %}{{ ui.icon('clock') }}{% else %}{{ ui.icon('lock') }}{% endif %}</span>
+        <div class="lifecycle-content">
+          <div><strong>Ansible konfigurieren</strong><small>{% if kubeconfig_available %}Konfiguration abgeschlossen{% elif terraform_state_available %}Ausführung verfügbar{% else %}Terraform Apply erforderlich{% endif %}</small></div>
+          <form method="post" action="/clusters/{{ cluster.id }}/jobs/ansible"><button class="button secondary" {% if not terraform_state_available %}disabled title="Erst nach Terraform-Apply verfügbar"{% endif %}>Ausführen</button></form>
+        </div>
+      </li>
+      <li class="lifecycle-step {% if kubeconfig_available %}is-current{% else %}is-locked{% endif %}">
+        <span class="lifecycle-marker">{% if kubeconfig_available %}{{ ui.icon('shield-check') }}{% else %}{{ ui.icon('lock') }}{% endif %}</span>
+        <div class="lifecycle-content">
+          <div><strong>Cluster verifizieren</strong><small>{% if kubeconfig_available %}Kubernetes-Status prüfen{% else %}Kubeconfig noch nicht verfügbar{% endif %}</small></div>
+          <form method="post" action="/clusters/{{ cluster.id }}/jobs/verify"><button class="button" {% if not kubeconfig_available %}disabled title="Erst nach erfolgreichem Apply verfügbar"{% endif %}>Cluster prüfen</button></form>
+        </div>
+      </li>
+    </ol>
+
+    {% if not kubeconfig_available %}
+    <p class="notice">{{ ui.icon('info') }}<span>Die Clusterprüfung wird verfügbar, sobald Ansible den Aufbau abgeschlossen und die Kubeconfig übertragen hat.</span></p>
+    {% endif %}
+  </section>
 </div>
 
-<section class="card">
-  <div class="row"><h2>Nodes</h2><code>{{ cluster.config_hash[:12] }}</code></div>
-  <table>
-    <thead><tr><th>Name</th><th>Rolle</th><th>VM-ID</th><th>IP</th><th>CPU</th><th>RAM</th><th>Disk</th></tr></thead>
-    <tbody>
-      {% for node in cluster.config.nodes %}
-      <tr><td>{{ node.name }}</td><td>{{ node.role }}</td><td>{{ node.vm_id }}</td><td>{{ node.ip }}</td><td>{{ node.cores }}</td><td>{{ node.memory_mb }} MB</td><td>{{ node.disk_gb }} GB</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
-
-<section class="card">
-  <h2>Lifecycle</h2>
-  <div class="actions">
-    <form method="post" action="/clusters/{{ cluster.id }}/jobs/plan"><button>Terraform planen</button></form>
-    <form method="post" action="/clusters/{{ cluster.id }}/jobs/apply"><button {% if cluster.planned_hash != cluster.config_hash %}disabled title="Zuerst aktuellen Plan erstellen"{% endif %}>Geprueften Plan anwenden</button></form>
-    <form method="post" action="/clusters/{{ cluster.id }}/jobs/ansible"><button class="secondary" {% if not terraform_state_available %}disabled title="Erst nach Terraform-Apply verfuegbar"{% endif %}>Ansible erneut ausfuehren</button></form>
-    <form method="post" action="/clusters/{{ cluster.id }}/jobs/verify"><button class="secondary" {% if not kubeconfig_available %}disabled title="Erst nach erfolgreichem Apply verfuegbar"{% endif %}>Cluster pruefen</button></form>
-  </div>
-  {% if not kubeconfig_available %}<p class="notice">Die Clusterpruefung wird verfuegbar, sobald Ansible den Aufbau abgeschlossen und die Kubeconfig uebertragen hat.</p>{% endif %}
-
-  <div class="danger-zone">
-    <h3>Infrastruktur zerstoeren</h3>
-    <p>Dadurch werden die zugehoerigen Proxmox-VMs geloescht. Zur Bestaetigung <code>{{ cluster.name }}</code> eingeben.</p>
-    <form method="post" class="actions">
-      <input name="destroy_confirmation" placeholder="{{ cluster.name }}" required>
-      <button class="danger" formaction="/clusters/{{ cluster.id }}/jobs/destroy_plan">Destroy planen</button>
-      <button class="danger" formaction="/clusters/{{ cluster.id }}/jobs/destroy" {% if cluster.destroy_planned_hash != cluster.config_hash %}disabled{% endif %}>Destroy-Plan anwenden</button>
-    </form>
-
-    <div class="delete-record">
-      <h3>Builder-Eintrag entfernen</h3>
-      {% if cluster.status.value == 'destroyed' %}
-      <p>Die Infrastruktur ist zerstoert. Jetzt koennen Konfiguration, State, Kubeconfig und Jobdaten dieses Clusters endgueltig entfernt werden.</p>
-      {% else %}
-      <p>Falls die VMs bereits ausserhalb des Builders geloescht wurden, prueft der Builder vor dem Entfernen die konfigurierten VM-IDs gegen Proxmox. Solange noch eine VM existiert, bleibt der Eintrag geschuetzt.</p>
-      {% endif %}
-      <form method="post" action="/clusters/{{ cluster.id }}/delete" class="actions">
-        <input name="delete_confirmation" placeholder="{{ cluster.name }}" required>
-        <button class="danger">Cluster endgueltig entfernen</button>
-      </form>
+<section class="card jobs-card">
+  <div class="card-header">
+    <div>
+      <p class="eyebrow">Aktivität</p>
+      <h2>Letzte Jobs</h2>
     </div>
+    <form method="post" action="/clusters/{{ cluster.id }}/prune-jobs" onsubmit="return confirm('Abgeschlossene alte Jobs aufräumen?')"><button class="button secondary">{{ ui.icon('trash') }}<span>Historie aufräumen</span></button></form>
+  </div>
+
+  <div class="job-list">
+    {% for job in jobs %}
+    <details class="job-item" {% if loop.first %}open{% endif %} data-job-id="{{ job.id }}" data-status="{{ job.status.value }}">
+      <summary>
+        <span class="job-summary-main"><span class="job-kind">{{ ui.job_kind(job.kind.value) }}</span><small>{{ job.created_at.strftime('%d.%m.%Y · %H:%M') }} Uhr</small></span>
+        {{ ui.job_status(job.status.value) }}
+        {% if job.status.value in ['queued','running'] %}<form method="post" action="/jobs/{{ job.id }}/cancel"><button class="button secondary">Abbrechen</button></form>{% endif %}
+        <span class="job-chevron">{{ ui.icon('chevron-down') }}</span>
+      </summary>
+      <pre class="job-log">{{ job.log or 'Wartet auf Worker …' }}</pre>
+      {% if job.error %}<p class="error">{{ ui.icon('alert') }}<span>{{ job.error }}</span></p>{% endif %}
+    </details>
+    {% else %}
+    <div class="empty-state compact">
+      <span class="empty-state-icon">{{ ui.icon('jobs') }}</span>
+      <div><h3>Noch keine Jobs</h3><p>Starte einen Terraform-Plan, um die erste Aktivität zu erzeugen.</p></div>
+    </div>
+    {% endfor %}
   </div>
 </section>
 
-<section class="card">
-  <div class="row">
-    <h2>Jobs</h2>
-    <form method="post" action="/clusters/{{ cluster.id }}/prune-jobs" onsubmit="return confirm('Abgeschlossene alte Jobs aufraeumen?')"><button class="secondary">Job-Historie aufraeumen</button></form>
+<details class="card danger-disclosure">
+  <summary>
+    <span class="danger-summary-icon">{{ ui.icon('alert') }}</span>
+    <span><strong>Gefahrbereich</strong><small>Infrastruktur zerstören oder Builder-Eintrag endgültig entfernen</small></span>
+    <span class="danger-chevron">{{ ui.icon('chevron-down') }}</span>
+  </summary>
+  <div class="danger-disclosure-content">
+    <section class="danger-action">
+      <div>
+        <h3>Infrastruktur zerstören</h3>
+        <p>Dadurch werden die zugehörigen Proxmox-VMs gelöscht. Zur Bestätigung <code>{{ cluster.name }}</code> eingeben.</p>
+      </div>
+      <form method="post" class="danger-form">
+        <input name="destroy_confirmation" placeholder="{{ cluster.name }}" aria-label="Clustername zur Bestätigung" required>
+        <div class="page-actions">
+          <button class="button danger" formaction="/clusters/{{ cluster.id }}/jobs/destroy_plan">Destroy planen</button>
+          <button class="button danger" formaction="/clusters/{{ cluster.id }}/jobs/destroy" {% if cluster.destroy_planned_hash != cluster.config_hash %}disabled title="Zuerst aktuellen Destroy-Plan erstellen"{% endif %}>Destroy-Plan anwenden</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="danger-action">
+      <div>
+        <h3>Builder-Eintrag entfernen</h3>
+        {% if cluster.status.value == 'destroyed' %}
+        <p>Die Infrastruktur ist zerstört. Jetzt können Konfiguration, State, Kubeconfig und Jobdaten dieses Clusters endgültig entfernt werden.</p>
+        {% else %}
+        <p>Falls die VMs bereits außerhalb des Builders gelöscht wurden, prüft der Builder vor dem Entfernen die konfigurierten VM-IDs gegen Proxmox. Solange noch eine VM existiert, bleibt der Eintrag geschützt.</p>
+        {% endif %}
+      </div>
+      <form method="post" action="/clusters/{{ cluster.id }}/delete" class="danger-form">
+        <input name="delete_confirmation" placeholder="{{ cluster.name }}" aria-label="Clustername zur Bestätigung" required>
+        <button class="button danger">Cluster endgültig entfernen</button>
+      </form>
+    </section>
   </div>
-  {% for job in jobs %}
-  <details {% if loop.first %}open{% endif %} data-job-id="{{ job.id }}" data-status="{{ job.status.value }}">
-    <summary><span>{{ job.kind.value }}</span><span class="badge {{ job.status.value }} job-status">{{ job.status.value }}</span><small>{{ job.created_at.strftime('%d.%m.%Y %H:%M') }}</small>{% if job.status.value in ['queued','running'] %}<form method="post" action="/jobs/{{ job.id }}/cancel"><button class="secondary">Abbrechen</button></form>{% endif %}</summary>
-    <pre class="job-log">{{ job.log or 'Wartet auf Worker ...' }}</pre>
-    {% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
-  </details>
-  {% else %}
-  <p>Noch keine Jobs.</p>
-  {% endfor %}
-</section>
+</details>
 {% endblock %}
+
 {% block scripts %}<script src="/static/jobs.js"></script>{% endblock %}

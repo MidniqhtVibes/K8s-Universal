@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -13,13 +14,13 @@ def test_sidebar_has_collapsible_cluster_section_and_bottom_admin_links():
     assert base.index('class="new-cluster-link') > base.index('</details>')
     assert 'class="sidebar-bottom"' in base
     assert '/credentials' in base and '/settings' in base
-    assert '<span class="nav-icon">C</span>\n          <span class="nav-text">Credentials</span>' in base
-    assert '<span class="nav-icon">E</span>\n          <span class="nav-text">Einstellungen</span>' in base
+    assert "ui.icon('key')" in base and '<span class="nav-text">Credentials</span>' in base
+    assert "ui.icon('settings')" in base and '<span class="nav-text">Einstellungen</span>' in base
     assert '<span class="nav-icon">O</span>' not in base
     assert '/static/sidebar.js' in base
 
     assert "body.sidebar-collapsed" in css
-    assert ".sidebar-bottom { margin-top: auto" in css
+    assert re.search(r"\.sidebar-bottom\s*\{[^}]*margin-top:\s*auto", css)
     assert ".cluster-links" in css
 
     assert "cluster-builder-sidebar-collapsed" in script

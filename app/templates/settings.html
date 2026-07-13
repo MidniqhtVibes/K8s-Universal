@@ -1,25 +1,166 @@
 {% extends "base.html" %}
+{% import "_macros.html" as ui %}
+
+{% block breadcrumb %}Einstellungen{% endblock %}
+
 {% block content %}
-<div class="page-head"><div><h1>Einstellungen</h1><p class="muted">Standardwerte und reservierte Vergabepools für neue Cluster.</p></div></div>
-{% if request.query_params.get('saved') %}<div class="success">Einstellungen gespeichert.</div>{% endif %}
-{% if error %}<div class="error"><strong>Ungültige Einstellung:</strong> {{ error }}</div>{% endif %}
-<form method="post" action="/settings" class="stack">
-  <section class="card"><h2>Automatisierung</h2><div class="form-grid">
-    <label class="check"><input type="checkbox" name="auto_suggest" {% if preferences.auto_suggest %}checked{% endif %}> Freie IPs und VM-IDs automatisch vorschlagen</label>
-    <label class="check"><input type="checkbox" name="vm_name_include_cluster" {% if preferences.vm_name_include_cluster %}checked{% endif %}> Clusternamen in Proxmox-VM-Namen aufnehmen</label>
-  </div></section>
-  <section class="card"><h2>Netzwerk-Standards</h2><div class="form-grid">
-    <label>VM-CIDR<input name="network_cidr" value="{{ preferences.network_cidr }}" required></label><label>Gateway<input name="gateway" value="{{ preferences.gateway }}" required></label>
-    <label>DNS, kommasepariert<input name="dns_servers" value="{{ preferences.dns_servers }}" required></label><label>Pod-CIDR<input name="pod_cidr" value="{{ preferences.pod_cidr }}" required></label>
-    <label>Service-CIDR<input name="service_cidr" value="{{ preferences.service_cidr }}" required></label><label class="wide">Reservierte IPs oder CIDRs<input name="reserved_ips" value="{{ preferences.reserved_ips }}" placeholder="10.200.50.2, 10.200.50.64/28"></label>
-  </div></section>
-  <section class="card"><h2>IP-Pools</h2><div class="form-grid compact">
-    {% for role, label in [('vip_pool','API-VIP'),('lb_ip','Load Balancer'),('cp_ip','Control Plane'),('worker_ip','Worker')] %}<label>{{ label }} von<input name="{{ role }}_start" value="{{ preferences[role + '_start'] }}" required></label><label>{{ label }} bis<input name="{{ role }}_end" value="{{ preferences[role + '_end'] }}" required></label>{% endfor %}
-  </div></section>
-  <section class="card"><h2>VM-ID-Pools und Standardanzahl</h2><div class="form-grid compact">
-    {% for role, label in [('lb','Load Balancer'),('cp','Control Plane'),('worker','Worker')] %}<label>{{ label }} IDs von<input type="number" name="{{ role }}_vm_id_start" value="{{ preferences[role + '_vm_id_start'] }}" required></label><label>{{ label }} IDs bis<input type="number" name="{{ role }}_vm_id_end" value="{{ preferences[role + '_vm_id_end'] }}" required></label><label>{{ label }} Anzahl<input type="number" name="{{ role }}_count" value="{{ preferences[role + '_count'] }}" required></label>{% endfor %}
-  </div></section>
-  <section class="card"><h2>Aktuell belegt</h2><p><strong>IPs:</strong> {{ used_ips|join(', ') if used_ips else 'keine' }}</p><p><strong>VM-IDs:</strong> {{ used_vm_ids|join(', ') if used_vm_ids else 'keine' }}</p></section>
-  <div class="actions"><button>Einstellungen speichern</button></div>
+<header class="page-header">
+  <div class="page-heading">
+    <p class="eyebrow">Verwaltung</p>
+    <h1>Einstellungen</h1>
+    <p class="page-subtitle">Lege Standardwerte und reservierte Vergabebereiche für neue Cluster zentral fest.</p>
+  </div>
+  <div class="page-actions">
+    <span class="badge neutral">Globale Standards</span>
+  </div>
+</header>
+
+{% if request.query_params.get('saved') %}
+<div class="alert alert-success" role="status">
+  <span class="alert-icon">{{ ui.icon('check') }}</span>
+  <div><strong>Einstellungen gespeichert</strong><p>Die neuen Standardwerte werden für zukünftige Cluster verwendet.</p></div>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="alert alert-error" role="alert">
+  <span class="alert-icon">{{ ui.icon('alert') }}</span>
+  <div><strong>Ungültige Einstellung</strong><p>{{ error }}</p></div>
+</div>
+{% endif %}
+
+<form method="post" action="/settings" class="stack form-page">
+  <section class="card">
+    <div class="card-header">
+      <div class="section-heading">
+        <span class="section-icon">{{ ui.icon('settings') }}</span>
+        <div>
+          <h2>Automatisierung</h2>
+          <p class="page-subtitle">Steuere, welche Werte der Cluster-Assistent automatisch vorbelegt.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="switch-list">
+      <label class="switch-field">
+        <input type="checkbox" name="auto_suggest" {% if preferences.auto_suggest %}checked{% endif %}>
+        <span class="switch-control" aria-hidden="true"></span>
+        <span class="switch-copy"><strong>Freie Adressen automatisch vorschlagen</strong><small>Ermittelt passende IPs und VM-IDs aus den unten definierten Pools.</small></span>
+      </label>
+      <label class="switch-field">
+        <input type="checkbox" name="vm_name_include_cluster" {% if preferences.vm_name_include_cluster %}checked{% endif %}>
+        <span class="switch-control" aria-hidden="true"></span>
+        <span class="switch-copy"><strong>Clustername in Proxmox-VM-Namen aufnehmen</strong><small>Erleichtert die eindeutige Zuordnung in gemeinsam genutzten Proxmox-Umgebungen.</small></span>
+      </label>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <div class="section-heading">
+        <span class="section-icon">{{ ui.icon('network') }}</span>
+        <div>
+          <h2>Netzwerk-Standards</h2>
+          <p class="page-subtitle">Diese Werte erscheinen als Ausgangspunkt im Cluster-Assistenten.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-grid">
+      <label>
+        VM-CIDR
+        <input name="network_cidr" value="{{ preferences.network_cidr }}" required>
+        <span class="field-hint">Adressbereich für die Proxmox-VMs</span>
+      </label>
+      <label>Gateway<input name="gateway" value="{{ preferences.gateway }}" required></label>
+      <label>
+        DNS-Server
+        <input name="dns_servers" value="{{ preferences.dns_servers }}" required>
+        <span class="field-hint">Mehrere Adressen kommasepariert</span>
+      </label>
+      <label>Pod-CIDR<input name="pod_cidr" value="{{ preferences.pod_cidr }}" required></label>
+      <label>Service-CIDR<input name="service_cidr" value="{{ preferences.service_cidr }}" required></label>
+      <label class="wide">
+        Reservierte IPs oder CIDRs
+        <input name="reserved_ips" value="{{ preferences.reserved_ips }}" placeholder="10.200.50.2, 10.200.50.64/28">
+        <span class="field-hint">Diese Adressen werden bei automatischen Vorschlägen immer übersprungen.</span>
+      </label>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <div class="section-heading">
+        <span class="section-icon">{{ ui.icon('network') }}</span>
+        <div>
+          <h2>IP-Vergabepools</h2>
+          <p class="page-subtitle">Definiere pro Rolle einen exklusiven Bereich für automatische Adressvorschläge.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="role-config-grid pool-config-grid">
+      {% for role, label in [('vip_pool','API-VIP'),('lb_ip','Load Balancer'),('cp_ip','Control Plane'),('worker_ip','Worker')] %}
+      <article class="card role-config-card">
+        <h3><span class="section-icon">{% if role == 'vip_pool' %}{{ ui.icon('shield-check') }}{% elif role == 'lb_ip' %}{{ ui.icon('balance') }}{% else %}{{ ui.icon('server') }}{% endif %}</span><span>{{ label }}<small>Verfügbarer IP-Bereich</small></span></h3>
+        <div class="form-grid compact">
+          <label>Von<input name="{{ role }}_start" value="{{ preferences[role + '_start'] }}" required></label>
+          <label>Bis<input name="{{ role }}_end" value="{{ preferences[role + '_end'] }}" required></label>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <div class="section-heading">
+        <span class="section-icon">{{ ui.icon('cube') }}</span>
+        <div>
+          <h2>VM-ID-Pools und Standardgrößen</h2>
+          <p class="page-subtitle">Trenne die ID-Bereiche der Rollen und lege deren Standardanzahl fest.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="role-config-grid">
+      {% for role, label in [('lb','Load Balancer'),('cp','Control Plane'),('worker','Worker')] %}
+      <article class="card role-config-card role-{{ role }}">
+        <h3><span class="section-icon">{% if role == 'lb' %}{{ ui.icon('balance') }}{% elif role == 'cp' %}{{ ui.icon('shield-check') }}{% else %}{{ ui.icon('cube') }}{% endif %}</span><span>{{ label }}<small>VM-IDs und Standardanzahl</small></span></h3>
+        <div class="form-grid compact">
+          <label>IDs von<input type="number" name="{{ role }}_vm_id_start" value="{{ preferences[role + '_vm_id_start'] }}" required></label>
+          <label>IDs bis<input type="number" name="{{ role }}_vm_id_end" value="{{ preferences[role + '_vm_id_end'] }}" required></label>
+          <label>Standardanzahl<input type="number" name="{{ role }}_count" value="{{ preferences[role + '_count'] }}" required></label>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="card allocation-summary">
+    <div class="card-header">
+      <div class="section-heading">
+        <span class="section-icon">{{ ui.icon('lock') }}</span>
+        <div>
+          <h2>Aktuell belegt</h2>
+          <p class="page-subtitle">Bereits verwendete Werte werden unabhängig von den Pools nicht erneut vergeben.</p>
+        </div>
+      </div>
+    </div>
+    <div class="allocation-summary-grid">
+      <div><span class="eyebrow">IP-Adressen</span><p><code>{{ used_ips|join(', ') if used_ips else 'keine' }}</code></p></div>
+      <div><span class="eyebrow">VM-IDs</span><p><code>{{ used_vm_ids|join(', ') if used_vm_ids else 'keine' }}</code></p></div>
+    </div>
+  </section>
+
+  <div class="sticky-actions">
+    <div class="sticky-actions-copy">
+      {{ ui.icon('info') }}
+      <span><strong>Gilt für neue Konfigurationen</strong><small>Bestehende Cluster werden durch diese Änderungen nicht angepasst.</small></span>
+    </div>
+    <div class="page-actions">
+      <button type="submit">{{ ui.icon('save') }} Einstellungen speichern</button>
+    </div>
+  </div>
 </form>
 {% endblock %}

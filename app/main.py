@@ -34,10 +34,12 @@ def cluster_runtime_is_current(cluster: Cluster) -> bool:
     return cluster.applied_hash is not None and cluster.applied_hash == cluster.config_hash
 
 
-def sidebar_context(_: Request) -> dict:
+def sidebar_context(request: Request) -> dict:
     with SessionLocal() as db:
         clusters = db.scalars(select(Cluster).order_by(Cluster.name)).all()
-        return {"sidebar_clusters": clusters}
+        user_id = request.session.get("user_id")
+        user = db.get(User, user_id) if user_id else None
+        return {"sidebar_clusters": clusters, "sidebar_username": user.username if user else None}
 
 
 templates = Jinja2Templates(
