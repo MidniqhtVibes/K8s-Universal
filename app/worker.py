@@ -3,6 +3,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import socket
 import subprocess
 import tempfile
@@ -383,10 +384,18 @@ def ingress_test_targets(documents: list[dict], api_vip: str) -> list[tuple[str,
     return targets
 
 
+def ingress_test_commands(documents: list[dict], api_vip: str) -> list[str]:
+    """Build copyable, shell-safe curl commands for all declared Ingress paths."""
+    return [
+        shlex.join(["curl", "-v", "-H", f"Host: {host}", url])
+        for url, host in ingress_test_targets(documents, api_vip)
+    ]
+
+
 def run_ingress_tests(job: Job, documents: list[dict], api_vip: str) -> None:
     targets = ingress_test_targets(documents, api_vip)
     if not targets:
-        append_log(job.id, "\nKein Ingress-Host im Bundle gefunden; es wurde kein HTTP-Test ausgeführt.\n")
+        append_log(job.id, "\nKein Ingress-Host im Bundle gefunden; es wurde weder ein HTTP-Test noch ein Curl-Testbefehl erzeugt.\n")
         return
     append_log(job.id, "\nHTTP-Funktionstest über die Cluster-VIP:\n")
     with httpx.Client(timeout=10, follow_redirects=False) as client:
@@ -397,6 +406,9 @@ def run_ingress_tests(job: Job, documents: list[dict], api_vip: str) -> None:
                 append_log(job.id, f"{host} {url} -> HTTP {response.status_code}\n")
             except httpx.HTTPError as exc:
                 append_log(job.id, f"{host} {url} -> nicht erreichbar: {exc}\n")
+    commands = ingress_test_commands(documents, api_vip)
+    append_log(job.id, "\nManueller Curl-Test (auf einem Host mit Zugriff auf die Cluster-VIP):\n")
+    append_log(job.id, "".join(f"{command}\n" for command in commands))
 
 
 def run_ansible_stack(

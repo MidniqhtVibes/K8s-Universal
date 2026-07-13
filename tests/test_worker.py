@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.proxmox import ProxmoxClient
-from app.worker import configured_guest_ipv4_addresses, failure_summary, ingress_test_targets, validate_proxmox
+from app.worker import configured_guest_ipv4_addresses, failure_summary, ingress_test_commands, ingress_test_targets, run_ingress_tests, validate_proxmox
 
 from .helpers import valid_config
 
@@ -83,9 +83,57 @@ def test_ingress_test_targets_use_vip_and_host_header():
     ]
 
 
+def test_ingress_test_commands_are_copyable_and_shell_safe():
+    documents = [{
+        "kind": "Ingress",
+        "spec": {"rules": [{"host": "web.lab.local", "http": {"paths": [{"path": "/"}, {"path": "/api?q=test value"}]}}]},
+    }]
+
+    assert ingress_test_commands(documents, "10.200.50.150") == [
+        "curl -v -H 'Host: web.lab.local' http://10.200.50.150/",
+        "curl -v -H 'Host: web.lab.local' 'http://10.200.50.150/api?q=test value'",
+    ]
+
+
+def test_run_ingress_tests_logs_manual_curl_command_after_http_result(monkeypatch):
+    log: list[str] = []
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, headers):
+            assert url == "http://10.200.50.150/"
+            assert headers == {"Host": "web.lab.local"}
+            return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr("app.worker.httpx.Client", lambda **_kwargs: FakeClient())
+    monkeypatch.setattr("app.worker.ensure_not_cancelled", lambda _job_id: None)
+    monkeypatch.setattr("app.worker.append_log", lambda _job_id, text: log.append(text))
+
+    documents = [{
+        "kind": "Ingress",
+        "spec": {"rules": [{"host": "web.lab.local", "http": {"paths": [{"path": "/"}]}}]},
+    }]
+    run_ingress_tests(SimpleNamespace(id="job-1"), documents, "10.200.50.150")
+
+    output = "".join(log)
+    command = "curl -v -H 'Host: web.lab.local' http://10.200.50.150/"
+    assert "web.lab.local http://10.200.50.150/ -> HTTP 200" in output
+    assert "Manueller Curl-Test" in output
+    assert command in output
+    assert output.index("-> HTTP 200") < output.index(command)
+    assert output.rstrip().endswith(command)
+
+
 def test_manifest_apply_runs_ingress_tests_inside_the_worker():
     worker = (Path(__file__).parents[1] / "app/worker.py").read_text(encoding="utf-8")
     assert "HTTP-Funktionstest über die Cluster-VIP:" in worker
+    assert "Manueller Curl-Test" in worker
+    assert "commands = ingress_test_commands(documents, api_vip)" in worker
     assert "run_ingress_tests(job, documents, api_vip)" in worker
     assert "client.get(url, headers={\"Host\": host})" in worker
     assert "Kein Ingress-Host im Bundle gefunden" in worker

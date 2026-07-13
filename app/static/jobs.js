@@ -1,3 +1,5 @@
+let reloadScheduled = false;
+
 async function refreshJobs() {
   const running = [...document.querySelectorAll('details[data-job-id]')].filter(item => ['queued','running'].includes(item.dataset.status));
   const statusLabels = {queued: 'Wartet', running: 'Läuft', succeeded: 'Erfolgreich', failed: 'Fehlgeschlagen', cancelled: 'Abgebrochen'};
@@ -15,9 +17,12 @@ async function refreshJobs() {
     const log = item.querySelector('.job-log');
     log.textContent = job.log || 'Wartet auf Worker …';
     log.scrollTop = log.scrollHeight;
-    if (!['queued','running'].includes(job.status)) setTimeout(() => location.reload(), 700);
+    if (!['queued','running'].includes(job.status) && !reloadScheduled) {
+      reloadScheduled = true;
+      setTimeout(() => location.reload(), 700);
+    }
   }
-  if (running.length) setTimeout(refreshJobs, 1500);
+  if (running.length && !reloadScheduled) setTimeout(refreshJobs, 1500);
 }
 for (const log of document.querySelectorAll('details[data-status="running"] .job-log, details[data-status="queued"] .job-log')) {
   log.scrollTop = log.scrollHeight;

@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% import "_macros.html" as ui %}
 
-{% block title %}Terminal · {{ cluster.name }}{% endblock %}
 {% block breadcrumb %}{{ cluster.name }} · Terminal{% endblock %}
 
 {% block content %}
@@ -44,10 +43,6 @@
   </div>
 
   <div class="terminal-frame">
-    <div class="terminal-frame-header" aria-hidden="true">
-      <span></span><span></span><span></span>
-      <small>kubectl · {{ cluster.name }}</small>
-    </div>
     <div id="terminal" data-cluster-id="{{ cluster.id }}"></div>
   </div>
 

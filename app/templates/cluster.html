@@ -1,16 +1,12 @@
 {% extends "base.html" %}
 {% import "_macros.html" as ui %}
 
-{% block title %}{{ cluster.name }} · K8s Universal{% endblock %}
 {% block breadcrumb %}Cluster / {{ cluster.name }}{% endblock %}
 
 {% block content %}
 {% set control_planes = cluster.config.nodes | selectattr('role', 'equalto', 'control_plane') | list %}
 {% set workers = cluster.config.nodes | selectattr('role', 'equalto', 'worker') | list %}
 {% set loadbalancers = cluster.config.nodes | selectattr('role', 'equalto', 'loadbalancer') | list %}
-{% set plan_current = cluster.planned_hash == cluster.config_hash %}
-{% set apply_current = cluster.applied_hash == cluster.config_hash %}
-
 <header class="page-header">
   <div class="page-heading">
     <p class="eyebrow">Clusterverwaltung</p>
@@ -90,46 +86,20 @@
       </div>
     </div>
 
-    <ol class="lifecycle-list">
-      <li class="lifecycle-step is-complete">
-        <span class="lifecycle-marker">{{ ui.icon('check') }}</span>
-        <div class="lifecycle-content">
-          <div><strong>Konfiguration</strong><small>Clusterdefinition ist gespeichert</small></div>
-        </div>
-      </li>
-      <li class="lifecycle-step {% if plan_current %}is-complete{% else %}is-current{% endif %}">
-        <span class="lifecycle-marker">{% if plan_current %}{{ ui.icon('check') }}{% else %}{{ ui.icon('file') }}{% endif %}</span>
-        <div class="lifecycle-content">
-          <div><strong>Terraform planen</strong><small>{% if plan_current %}Plan ist aktuell{% else %}Änderungen prüfen{% endif %}</small></div>
-          <form method="post" action="/clusters/{{ cluster.id }}/jobs/plan"><button class="button secondary">Planen</button></form>
-        </div>
-      </li>
-      <li class="lifecycle-step {% if apply_current %}is-complete{% elif plan_current %}is-current{% else %}is-locked{% endif %}">
-        <span class="lifecycle-marker">{% if apply_current %}{{ ui.icon('check') }}{% elif plan_current %}{{ ui.icon('clock') }}{% else %}{{ ui.icon('lock') }}{% endif %}</span>
-        <div class="lifecycle-content">
-          <div><strong>Terraform anwenden</strong><small>{% if apply_current %}Infrastruktur ist aktuell{% elif plan_current %}Plan kann angewendet werden{% else %}Aktueller Plan erforderlich{% endif %}</small></div>
-          <form method="post" action="/clusters/{{ cluster.id }}/jobs/apply"><button class="button secondary" {% if cluster.planned_hash != cluster.config_hash %}disabled title="Zuerst aktuellen Plan erstellen"{% endif %}>Anwenden</button></form>
-        </div>
-      </li>
-      <li class="lifecycle-step {% if kubeconfig_available %}is-complete{% elif terraform_state_available %}is-current{% else %}is-locked{% endif %}">
-        <span class="lifecycle-marker">{% if kubeconfig_available %}{{ ui.icon('check') }}{% elif terraform_state_available %}{{ ui.icon('clock') }}{% else %}{{ ui.icon('lock') }}{% endif %}</span>
-        <div class="lifecycle-content">
-          <div><strong>Ansible konfigurieren</strong><small>{% if kubeconfig_available %}Konfiguration abgeschlossen{% elif terraform_state_available %}Ausführung verfügbar{% else %}Terraform Apply erforderlich{% endif %}</small></div>
-          <form method="post" action="/clusters/{{ cluster.id }}/jobs/ansible"><button class="button secondary" {% if not terraform_state_available %}disabled title="Erst nach Terraform-Apply verfügbar"{% endif %}>Ausführen</button></form>
-        </div>
-      </li>
-      <li class="lifecycle-step {% if kubeconfig_available %}is-current{% else %}is-locked{% endif %}">
-        <span class="lifecycle-marker">{% if kubeconfig_available %}{{ ui.icon('shield-check') }}{% else %}{{ ui.icon('lock') }}{% endif %}</span>
-        <div class="lifecycle-content">
-          <div><strong>Cluster verifizieren</strong><small>{% if kubeconfig_available %}Kubernetes-Status prüfen{% else %}Kubeconfig noch nicht verfügbar{% endif %}</small></div>
-          <form method="post" action="/clusters/{{ cluster.id }}/jobs/verify"><button class="button" {% if not kubeconfig_available %}disabled title="Erst nach erfolgreichem Apply verfügbar"{% endif %}>Cluster prüfen</button></form>
-        </div>
-      </li>
-    </ol>
-
-    {% if not kubeconfig_available %}
-    <p class="notice">{{ ui.icon('info') }}<span>Die Clusterprüfung wird verfügbar, sobald Ansible den Aufbau abgeschlossen und die Kubeconfig übertragen hat.</span></p>
-    {% endif %}
+    <div class="lifecycle-action-grid">
+      <form method="post" action="/clusters/{{ cluster.id }}/jobs/plan">
+        <button class="button full">{{ ui.icon('file') }}<span>Terraform planen</span></button>
+      </form>
+      <form method="post" action="/clusters/{{ cluster.id }}/jobs/apply">
+        <button class="button full" {% if cluster.planned_hash != cluster.config_hash %}disabled title="Zuerst aktuellen Plan erstellen"{% endif %}>{{ ui.icon('check') }}<span>Geprüften Plan anwenden</span></button>
+      </form>
+      <form method="post" action="/clusters/{{ cluster.id }}/jobs/ansible">
+        <button class="button secondary full" {% if not terraform_state_available %}disabled title="Erst nach Terraform-Apply verfügbar"{% endif %}>{{ ui.icon('refresh') }}<span>Ansible erneut ausführen</span></button>
+      </form>
+      <form method="post" action="/clusters/{{ cluster.id }}/jobs/verify">
+        <button class="button secondary full" {% if not kubeconfig_available %}disabled title="Erst nach erfolgreichem Apply verfügbar"{% endif %}>{{ ui.icon('shield-check') }}<span>Cluster prüfen</span></button>
+      </form>
+    </div>
   </section>
 </div>
 

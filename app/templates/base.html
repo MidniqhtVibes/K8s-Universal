@@ -5,11 +5,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#07111f">
-  <title>{% block title %}K8s Universal · Cluster Builder{% endblock %}</title>
+  <title>K8S-Universal</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body class="{% if not request.session.get('user_id') %}is-anonymous{% endif %}">
+  {% if request.session.get('user_id') %}
+  <script>
+    try {
+      if (localStorage.getItem('cluster-builder-sidebar-collapsed') === '1') {
+        document.body.classList.add('sidebar-collapsed');
+      }
+      if (localStorage.getItem('cluster-builder-clusters-open') === '0') {
+        document.body.classList.add('sidebar-clusters-closed');
+      }
+    } catch (_) {
+      // Die Navigation funktioniert auch, wenn der Browser Local Storage blockiert.
+    }
+  </script>
+  {% endif %}
   <svg class="icon-sprite" aria-hidden="true">
     <symbol id="icon-logo" viewBox="0 0 24 24"><path d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4L12 2.8Z"/><circle cx="12" cy="7.5" r="1.5"/><circle cx="8.2" cy="14.7" r="1.5"/><circle cx="15.8" cy="14.7" r="1.5"/><path d="m11.2 8.8-2.1 4.5m3.7-4.5 2.1 4.5m-5.2 1.4h4.6"/></symbol>
     <symbol id="icon-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1V10Z"/></symbol>
@@ -63,7 +77,7 @@
           </a>
 
           <details class="sidebar-section" data-sidebar-section="clusters" {% if request.url.path.startswith('/clusters') %}open{% endif %}>
-            <summary class="sidebar-summary {% if request.url.path.startswith('/clusters') and '/applications' not in request.url.path %}active{% endif %}">
+            <summary class="sidebar-summary {% if request.url.path.startswith('/clusters') %}active{% endif %}">
               <span class="nav-icon">{{ ui.icon('cluster') }}</span>
               <span class="nav-text">Cluster</span>
               <span class="chevron">{{ ui.icon('chevron-down') }}</span>
@@ -87,23 +101,6 @@
             <span class="nav-icon">{{ ui.icon('plus') }}</span>
             <span class="nav-text">Neuer Cluster</span>
           </a>
-
-          {% if cluster is defined %}
-          <a href="/clusters/{{ cluster.id }}/applications" class="{% if '/applications' in request.url.path %}active{% endif %}">
-            <span class="nav-icon">{{ ui.icon('app') }}</span>
-            <span class="nav-text">Anwendungen</span>
-          </a>
-          {% elif sidebar_clusters %}
-          <a href="/clusters/{{ sidebar_clusters[0].id }}/applications">
-            <span class="nav-icon">{{ ui.icon('app') }}</span>
-            <span class="nav-text">Anwendungen</span>
-          </a>
-          {% else %}
-          <span class="sidebar-nav-disabled" aria-disabled="true">
-            <span class="nav-icon">{{ ui.icon('app') }}</span>
-            <span class="nav-text">Anwendungen</span>
-          </span>
-          {% endif %}
         </nav>
       </div>
 
@@ -133,11 +130,10 @@
         <div class="topbar-start">
           <button type="button" class="mobile-nav-toggle icon-button" id="mobile-nav-toggle" aria-label="Navigation öffnen" aria-controls="app-sidebar" aria-expanded="false">{{ ui.icon('menu') }}</button>
           <nav class="breadcrumb" aria-label="Brotkrümelnavigation">
-            <span>K8s Universal</span><span class="breadcrumb-separator">/</span><strong>{% block breadcrumb %}Übersicht{% endblock %}</strong>
+            <a class="breadcrumb-home" href="/">K8s Universal</a><span class="breadcrumb-separator">/</span><strong>{% block breadcrumb %}Übersicht{% endblock %}</strong>
           </nav>
         </div>
         <div class="topbar-actions">
-          <span class="environment">{{ ui.icon('server') }}<span>Proxmox</span></span>
           <span class="topbar-user"><span class="topbar-avatar">{{ (sidebar_username or 'A')[:1]|upper }}</span><span>{{ sidebar_username or 'Admin' }}</span></span>
         </div>
       </header>
@@ -155,7 +151,6 @@
   </main>
   {% endif %}
 
-  {% if request.session.get('user_id') and request.url.scheme != 'https' %}<div class="http-warning">{{ ui.icon('alert') }}<span>HTTP aktiv: Zugangsdaten nur in einem vertrauenswürdigen internen Netz eingeben.</span></div>{% endif %}
   {% block scripts %}{% endblock %}
   {% if request.session.get('user_id') %}<script src="/static/sidebar.js"></script>{% endif %}
 </body>
