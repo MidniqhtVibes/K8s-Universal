@@ -17,12 +17,18 @@ def test_generator_produces_secret_free_outputs(tmp_path):
     tfvars = json.loads((tmp_path / "cluster/generated/terraform.auto.tfvars.json").read_text())
     inventory = yaml.safe_load((tmp_path / "cluster/generated/ansible-inventory.yml").read_text())
     ansible_vars = yaml.safe_load((tmp_path / "cluster/generated/ansible-vars.yml").read_text())
+    traefik_values = yaml.safe_load((tmp_path / "cluster/generated/traefik-values.yaml").read_text())
     assert tfvars["template_vm_id"] == 9876
     assert tfvars["nodes"]["worker-01"]["ip"] == "10.10.10.31"
     assert tfvars["nodes"]["worker-01"]["vm_name"] == "test-cluster-worker-01"
     assert inventory["all"]["children"]["control_plane"]["hosts"]["control-01"]["ansible_host"] == "10.10.10.21"
     assert 1 <= ansible_vars["keepalived_virtual_router_id"] <= 255
     assert ansible_vars["calico_block_size"] == 26
+    assert traefik_values["service"] == {
+        "spec": {"type": "NodePort", "externalTrafficPolicy": "Cluster"}
+    }
+    assert traefik_values["ports"]["web"]["nodePort"] == 30080
+    assert traefik_values["ports"]["websecure"]["nodePort"] == 30443
     contents = "".join(path.read_text() for path in (tmp_path / "cluster").rglob("*") if path.is_file())
     assert "PRIVATE KEY" not in contents
     assert "api_token" not in contents

@@ -125,6 +125,13 @@ Login mit Benutzer `admin` und dem Wert aus `INITIAL_ADMIN_PASSWORD`.
 Ein erfolgreicher Cluster endet mit `READY` und sollte in `kubectl get nodes` alle Nodes als `Ready` zeigen.
 Nach einer Konfigurationsaenderung wird ein Cluster wieder zum Entwurf; die alte Kubeconfig wird gesperrt und ein neuer Terraform-Plan mit anschließendem Apply ist erforderlich.
 
+Vor Plan und Apply blockiert der Builder fremde Proxmox-Ressourcen mit
+kollidierenden VM-IDs, erzeugten VM-Namen oder statischen IPv4-Adressen aus
+`ipconfigN`/`netN`. Das Proxmox-Token benötigt dafür zusätzlich Leserechte
+(`VM.Audit`) auf die sichtbaren Gastkonfigurationen. IPs, die nur manuell im
+Gastbetriebssystem gesetzt wurden, müssen unter **Einstellungen** reserviert
+werden, weil sie nicht aus der Proxmox-Konfiguration erkennbar sind.
+
 Der Builder unterstuetzt derzeit Kubernetes `v1.36`, SSH auf Port `22` und den Kubernetes-API-Port `6443`. Diese Werte sind bewusst festgelegt, weil Cloud-Init und kubeadm abweichende Ports nicht konfigurieren.
 
 ## Anwendungen

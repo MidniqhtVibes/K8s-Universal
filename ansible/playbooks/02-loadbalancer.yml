@@ -85,7 +85,10 @@
 
     - name: Set keepalived priority
       ansible.builtin.set_fact:
-        keepalived_priority: "{{ 254 - groups['loadbalancer'].index(inventory_hostname) }}"
+        # Keep enough distance from VRRP's reserved address-owner priority 255.
+        # Adjacent values are intentional: the health-check weight of 2 must
+        # be able to move a healthy backup above an unhealthy current master.
+        keepalived_priority: "{{ 150 - groups['loadbalancer'].index(inventory_hostname) }}"
 
     - name: Configure Keepalived
       ansible.builtin.copy:

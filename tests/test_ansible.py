@@ -68,7 +68,9 @@ def test_load_balancer_uses_cluster_variables_and_hides_disabled_ingress():
     assert "virtual_router_id {{ keepalived_virtual_router_id }}" in playbook
     assert "virtual_router_id 51" not in playbook
     assert "{% if ingress_enabled %}" in playbook
-    assert "254 - groups['loadbalancer'].index(inventory_hostname)" in playbook
+    assert "150 - groups['loadbalancer'].index(inventory_hostname)" in playbook
+    assert "254 - groups['loadbalancer'].index(inventory_hostname)" not in playbook
+    assert "weight 2" in playbook
 
 
 def test_calico_block_size_is_generated_per_pod_network():

@@ -40,7 +40,7 @@ def render_cluster(config: ClusterConfig, destination: Path, source_root: Path) 
         "nodes": {
             node.name: {
                 **node.model_dump(mode="json"),
-                "vm_name": _proxmox_vm_name(config.name, node.name) if config.proxmox.vm_name_include_cluster else node.name,
+                "vm_name": proxmox_vm_name(config.name, node.name) if config.proxmox.vm_name_include_cluster else node.name,
             }
             for node in config.nodes
         },
@@ -102,7 +102,11 @@ def render_cluster(config: ClusterConfig, destination: Path, source_root: Path) 
         "deployment": {"replicas": config.addons.ingress.replicas},
         "ingressClass": {"enabled": True, "isDefaultClass": True, "name": "traefik"},
         "providers": {"kubernetesIngress": {"enabled": True}},
-        "service": {"type": "NodePort", "spec": {"externalTrafficPolicy": "Cluster"}},
+        # Traefik chart v40 moved the Kubernetes Service type below
+        # ``service.spec``.  Leaving it at ``service.type`` silently retains
+        # the chart default (LoadBalancer), whose missing external IP makes
+        # ``helm --wait`` time out on bare-metal/Proxmox clusters.
+        "service": {"spec": {"type": "NodePort", "externalTrafficPolicy": "Cluster"}},
         "ports": {
             "web": {"port": 80, "expose": {"default": True}, "exposedPort": 80, "nodePort": config.addons.ingress.http_node_port, "protocol": "TCP"},
             "websecure": {"port": 443, "expose": {"default": True}, "exposedPort": 443, "nodePort": config.addons.ingress.https_node_port, "protocol": "TCP"},
@@ -147,7 +151,8 @@ def _refresh_tree(source: Path, destination: Path, preserve: tuple[str, ...] = (
     )
 
 
-def _proxmox_vm_name(cluster_name: str, node_name: str) -> str:
+def proxmox_vm_name(cluster_name: str, node_name: str) -> str:
+    """Return the exact VM name Terraform will request from Proxmox."""
     # 63 characters keeps the generated name DNS-compatible as well.
     prefix = cluster_name[: max(1, 62 - len(node_name))].rstrip("-")
     return f"{prefix}-{node_name}"

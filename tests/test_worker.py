@@ -4,7 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.worker import ingress_test_targets, validate_proxmox
+from app.proxmox import ProxmoxClient
+from app.worker import configured_guest_ipv4_addresses, failure_summary, ingress_test_targets, validate_proxmox
 
 from .helpers import valid_config
 
@@ -57,6 +58,7 @@ def test_apply_consumes_the_reviewed_tfplan_without_replacing_it():
     assert "create_terraform_plan(" not in apply_branch
     assert 'plan_path = terraform_dir / "tfplan"' in apply_branch
     assert "Der geprüfte Terraform-Plan fehlt" in apply_branch
+    assert apply_branch.index("validate_proxmox(") < apply_branch.index('run_command(job, ["terraform", "apply"')
     assert "plan_path.unlink(missing_ok=True)" in apply_branch
 
 
@@ -97,6 +99,22 @@ def test_helm_and_cluster_verification_wait_for_ready_resources():
     assert '"--field-selector=status.phase!=Succeeded,status.phase!=Failed"' in worker
 
 
+def test_helm_failure_does_not_report_last_successful_ansible_task():
+    log = """TASK [Replace server endpoint with VIP]
+ok: [localhost]
+$ helm upgrade --install traefik traefik/traefik
+Error: UPGRADE FAILED: timed out waiting for the condition
+"""
+    summary = failure_summary(
+        RuntimeError("Befehl fehlgeschlagen (1): helm upgrade --install traefik"),
+        log,
+    )
+
+    assert summary is not None
+    assert "Helm-Release" in summary
+    assert "Replace server endpoint with VIP" not in summary
+
+
 def test_proxmox_preflight_only_exempts_vm_ids_owned_by_terraform_state(monkeypatch, tmp_path):
     config = valid_config()
     state_dir = tmp_path / "terraform"
@@ -128,6 +146,126 @@ def test_proxmox_preflight_only_exempts_vm_ids_owned_by_terraform_state(monkeypa
 
     with pytest.raises(RuntimeError, match=str(config.nodes[1].vm_id)):
         validate_proxmox(SimpleNamespace(id="test-job"), config, "test-token", tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("guest_config", "expected"),
+    [
+        ({"ipconfig0": "ip=10.20.30.40/24,gw=10.20.30.1", "ipconfig1": "ip=dhcp"}, {"10.20.30.40"}),
+        ({"net0": "name=eth0,bridge=vmbr0,ip=10.20.30.41/24,type=veth"}, {"10.20.30.41"}),
+        ({"ipconfig0": "ip6=2001:db8::10/64", "unrelated": "ip=10.20.30.42/24"}, set()),
+    ],
+)
+def test_extracts_static_ipv4_addresses_from_proxmox_guest_configs(guest_config, expected):
+    assert {str(item) for item in configured_guest_ipv4_addresses(guest_config)} == expected
+
+
+@pytest.mark.parametrize(
+    ("resource", "expected_path"),
+    [
+        ({"type": "qemu", "node": "pve-a", "vmid": 301}, "nodes/pve-a/qemu/301/config"),
+        ({"type": "lxc", "node": "pve-b", "vmid": "401"}, "nodes/pve-b/lxc/401/config"),
+    ],
+)
+def test_proxmox_client_reads_guest_config_from_resource_location(resource, expected_path):
+    client = object.__new__(ProxmoxClient)
+    requested_paths = []
+
+    def fake_get(path, **_params):
+        requested_paths.append(path)
+        return {"ipconfig0": "ip=10.20.30.40/24"}
+
+    client.get = fake_get
+
+    assert client.guest_config(resource) == {"ipconfig0": "ip=10.20.30.40/24"}
+    assert requested_paths == [expected_path]
+
+
+def test_proxmox_preflight_rejects_foreign_vm_names(monkeypatch, tmp_path):
+    config = valid_config()
+
+    class FakeProxmoxClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def discover(self):
+            return {
+                "nodes": [{"node": "pve"}],
+                "vms": [
+                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve"},
+                    {"vmid": 777, "name": "test-cluster-lb-01", "template": 0, "type": "qemu", "node": "pve"},
+                ],
+                "details": {"pve": {"storages": [{"storage": "local-lvm"}], "bridges": [{"iface": "vmbr0"}]}},
+            }
+
+    monkeypatch.setattr("app.worker.ProxmoxClient", FakeProxmoxClient)
+    monkeypatch.setattr("app.worker.append_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError) as error:
+        validate_proxmox(SimpleNamespace(id="test-job"), config, "test-token", tmp_path)
+    assert "Proxmox-Namen" in str(error.value)
+    assert "test-cluster-lb-01 (VM-ID 777)" in str(error.value)
+
+
+def test_proxmox_preflight_rejects_foreign_static_ips(monkeypatch, tmp_path):
+    config = valid_config()
+
+    class FakeProxmoxClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def discover(self):
+            return {
+                "nodes": [{"node": "pve"}],
+                "vms": [
+                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve"},
+                    {"vmid": 778, "name": "legacy-vm", "template": 0, "type": "qemu", "node": "pve"},
+                ],
+                "details": {"pve": {"storages": [{"storage": "local-lvm"}], "bridges": [{"iface": "vmbr0"}]}},
+            }
+
+        def guest_config(self, resource):
+            assert resource["vmid"] == 778
+            return {"ipconfig0": f"ip={config.nodes[0].ip}/24,gw={config.network.gateway}"}
+
+    monkeypatch.setattr("app.worker.ProxmoxClient", FakeProxmoxClient)
+    monkeypatch.setattr("app.worker.append_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError) as error:
+        validate_proxmox(SimpleNamespace(id="test-job"), config, "test-token", tmp_path)
+    assert "IP-Adressen" in str(error.value)
+    assert f"{config.nodes[0].ip} (VM-ID 778, legacy-vm)" in str(error.value)
+
+
+def test_proxmox_preflight_allows_state_owned_names_and_ips(monkeypatch, tmp_path):
+    config = valid_config()
+    state_dir = tmp_path / "terraform"
+    state_dir.mkdir()
+    (state_dir / "terraform.tfstate").write_text(json.dumps({
+        "resources": [{
+            "type": "proxmox_virtual_environment_vm",
+            "instances": [{"attributes": {"vm_id": config.nodes[0].vm_id}}],
+        }]
+    }), encoding="utf-8")
+
+    class FakeProxmoxClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def discover(self):
+            return {
+                "nodes": [{"node": "pve"}],
+                "vms": [
+                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve"},
+                    {"vmid": config.nodes[0].vm_id, "name": "test-cluster-lb-01", "template": 0, "type": "qemu", "node": "pve"},
+                ],
+                "details": {"pve": {"storages": [{"storage": "local-lvm"}], "bridges": [{"iface": "vmbr0"}]}},
+            }
+
+    monkeypatch.setattr("app.worker.ProxmoxClient", FakeProxmoxClient)
+    monkeypatch.setattr("app.worker.append_log", lambda *_args, **_kwargs: None)
+
+    validate_proxmox(SimpleNamespace(id="test-job"), config, "test-token", tmp_path)
 
 
 def test_worker_recovers_stale_jobs_and_supports_ansible_rerun():

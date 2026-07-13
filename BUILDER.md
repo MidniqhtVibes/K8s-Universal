@@ -98,6 +98,15 @@ Cluster, manuell reservierte IPs/CIDRs und bei ausgewähltem Proxmox-Credential
 bereits vorhandene VM-IDs werden übersprungen. Doppelte Vergaben zwischen vom
 Builder verwalteten Clustern werden zusätzlich beim Speichern abgewiesen.
 
+Vor dem Terraform-Plan und erneut unmittelbar vor dessen Anwendung prüft der
+Worker die Zielumgebung direkt über die Proxmox-API. Fremde Ressourcen mit
+einer angeforderten VM-ID, einem erzeugten VM-Namen oder einer bereits in
+`ipconfigN` beziehungsweise `netN` hinterlegten statischen IPv4-Adresse
+blockieren den Lauf mit einer konkreten Fehlermeldung. Ressourcen, die laut
+Terraform-State demselben Cluster gehören, werden dabei bewusst ausgenommen.
+Manuell innerhalb eines Gastbetriebssystems gesetzte Adressen, die nicht in der
+Proxmox-Konfiguration stehen, bleiben über **Reservierte IPs/CIDRs** abzusichern.
+
 Der Schalter **Clustername im Proxmox-VM-Namen** erzeugt Namen wie
 `produktion-control-01`. Bestehende Cluster behalten ohne aktivierten Schalter
 ihre bisherigen VM-Namen.
@@ -122,7 +131,7 @@ Jedes Speichern und jeder Lauf erzeugt eine unveränderliche Revision. Frühere 
 
 ## Proxmox-Berechtigungen
 
-Das Token soll nur die für VM-Cloning, VM-Konfiguration, Storage-Abfrage und Ressourcenerkennung benötigten Rechte besitzen. Kein Root-Passwort verwenden. Der genaue Rechteumfang hängt von Proxmox-Version, Pool- und Storage-Struktur ab und muss vor dem ersten echten Plan in der Zielumgebung geprüft werden.
+Das Token soll nur die für VM-Cloning, VM-Konfiguration, Storage-Abfrage und Ressourcenerkennung benötigten Rechte besitzen. Die Kollisionsprüfung muss mit `VM.Audit` die Konfiguration der für das Token sichtbaren QEMU-VMs und LXC-Container lesen können. Kein Root-Passwort verwenden. Der genaue Rechteumfang hängt von Proxmox-Version, Pool- und Storage-Struktur ab und muss vor dem ersten echten Plan in der Zielumgebung geprüft werden.
 
 Tokenformat für den Builder:
 

@@ -42,6 +42,18 @@ class ProxmoxClient:
             result["details"][name] = {"bridges": networks, "storages": storages}
         return result
 
+    def guest_config(self, resource: dict) -> dict:
+        """Read one QEMU/LXC config for static-address collision checks."""
+        guest_type = str(resource.get("type", ""))
+        node = str(resource.get("node", ""))
+        vm_id = resource.get("vmid")
+        if guest_type not in {"qemu", "lxc"} or not node or vm_id is None:
+            raise ProxmoxError("Proxmox-Ressource enthaelt keine lesbare Gast-Konfiguration")
+        config = self.get(f"nodes/{node}/{guest_type}/{int(vm_id)}/config")
+        if not isinstance(config, dict):
+            raise ProxmoxError(f"Proxmox-Konfiguration fuer VM-ID {vm_id} ist ungueltig")
+        return config
+
 
 def split_token(value: str) -> tuple[str, str]:
     """Accept the provider format token-id=secret and preserve both pieces."""

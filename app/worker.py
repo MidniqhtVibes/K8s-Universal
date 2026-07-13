@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from ipaddress import IPv4Address, IPv4Interface
 from pathlib import Path
 
 import httpx
@@ -17,7 +18,7 @@ from sqlalchemy import select
 
 from .config import get_settings
 from .db import SessionLocal
-from .generator import render_cluster
+from .generator import proxmox_vm_name, render_cluster
 from .manifests import render_snapshot
 from .models import ApplicationBundle, Cluster, ClusterStatus, CredentialKind, Job, JobKind, JobStatus, ManifestRevision
 from .proxmox import ProxmoxClient
@@ -165,7 +166,9 @@ def extract_ansible_failure(log: str) -> tuple[str | None, str | None, str | Non
     for match in re.finditer(r"^fatal: \[([^\]]+)\]: FAILED! => (.+)$", log, re.MULTILINE):
         fatal = match
     if not fatal:
-        return None, task, None
+        # A later Helm/kubectl failure must not be attributed to the final
+        # successful Ansible task that merely remains in the shared job log.
+        return None, None, None
     host = fatal.group(1)
     raw_payload = fatal.group(2).strip()
     cause = raw_payload
@@ -212,6 +215,11 @@ def failure_summary(error: Exception, log: str = "") -> str | None:
         return "Kurzdiagnose: Nicht alle VMs waren per SSH erreichbar.\nNaechster Schritt: " + recommended_next_step(text)
     if "CoreDNS" in text:
         return "Kurzdiagnose: CoreDNS wurde nicht rechtzeitig bereit.\nNaechster Schritt: " + recommended_next_step(text)
+    if "helm upgrade" in text or "helm install" in text:
+        return (
+            "Kurzdiagnose: Der Helm-Release wurde nicht erfolgreich bereit.\n"
+            "Naechster Schritt: Pod-Status, Service-Typ und Events im Ziel-Namespace pruefen."
+        )
     if "Befehl fehlgeschlagen" in text:
         return "Kurzdiagnose: Ein externer Terraform-, Ansible-, Helm- oder kubectl-Befehl ist fehlgeschlagen.\nNaechster Schritt: " + recommended_next_step(text)
     return None
@@ -236,9 +244,32 @@ def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
         raise RuntimeError(f"SSH-Timeout für: {', '.join(sorted(pending))}")
 
 
+def configured_guest_ipv4_addresses(guest_config: dict) -> set[IPv4Address]:
+    """Extract static IPv4 addresses from Proxmox QEMU/LXC network fields."""
+    addresses: set[IPv4Address] = set()
+    for key, value in guest_config.items():
+        if not re.fullmatch(r"(?:ipconfig|net)\d+", str(key)):
+            continue
+        for option in str(value).split(","):
+            name, separator, raw_value = option.partition("=")
+            if not separator or name.strip() != "ip":
+                continue
+            candidate = raw_value.strip()
+            if candidate.lower() in {"dhcp", "manual"}:
+                continue
+            try:
+                addresses.add(IPv4Interface(candidate).ip)
+            except ValueError:
+                # IPv6 values and malformed third-party metadata are not IPv4
+                # allocations and must not create a false collision.
+                continue
+    return addresses
+
+
 def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace: Path) -> None:
     append_log(job.id, "Proxmox-Ressourcen und Konflikte werden geprüft …\n")
-    discovery = ProxmoxClient(config.proxmox.endpoint, api_token, config.proxmox.verify_tls).discover()
+    client = ProxmoxClient(config.proxmox.endpoint, api_token, config.proxmox.verify_tls)
+    discovery = client.discover()
     node_names = {item.get("node") for item in discovery.get("nodes", [])}
     if config.proxmox.node not in node_names:
         raise RuntimeError(f"Proxmox-Node {config.proxmox.node} ist nicht verfügbar")
@@ -267,6 +298,55 @@ def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace:
     collisions = sorted({node.vm_id for node in config.nodes} & (used_ids - owned_ids))
     if collisions:
         raise RuntimeError(f"VM-IDs sind bereits durch fremde Ressourcen belegt: {', '.join(map(str, collisions))}")
+
+    foreign_resources = [
+        item for item in resources
+        if item.get("vmid") is not None and int(item["vmid"]) not in owned_ids
+    ]
+    planned_names = {
+        (
+            proxmox_vm_name(config.name, node.name)
+            if config.proxmox.vm_name_include_cluster
+            else node.name
+        )
+        for node in config.nodes
+    }
+    name_conflicts = sorted(
+        {
+            (str(item["name"]), int(item["vmid"]))
+            for item in foreign_resources
+            if item.get("name") in planned_names
+        }
+    )
+    if name_conflicts:
+        conflict_details = ", ".join(
+            f"{name} (VM-ID {vm_id})" for name, vm_id in name_conflicts
+        )
+        raise RuntimeError(
+            f"Proxmox-Namen sind bereits durch fremde Ressourcen belegt: {conflict_details}"
+        )
+
+    requested_addresses = {config.network.api_vip, *(node.ip for node in config.nodes)}
+    ip_conflicts: set[tuple[str, int, str]] = set()
+    for resource in foreign_resources:
+        if resource.get("template") in (1, True, "1"):
+            continue
+        if resource.get("type") not in {"qemu", "lxc"}:
+            continue
+        guest_addresses = configured_guest_ipv4_addresses(client.guest_config(resource))
+        for address in requested_addresses & guest_addresses:
+            ip_conflicts.add(
+                (str(address), int(resource["vmid"]), str(resource.get("name") or "ohne Name"))
+            )
+    if ip_conflicts:
+        conflict_details = ", ".join(
+            f"{address} (VM-ID {vm_id}, {name})"
+            for address, vm_id, name in sorted(ip_conflicts)
+        )
+        raise RuntimeError(
+            "IP-Adressen sind bereits in fremden Proxmox-Gaesten konfiguriert: "
+            + conflict_details
+        )
     append_log(job.id, "Proxmox-Prüfung erfolgreich.\n")
 
 
@@ -429,9 +509,13 @@ def execute(job_id: str) -> None:
 
         if job.kind == JobKind.APPLY:
             plan_path = terraform_dir / "tfplan"
-            invalidate_plan_authorization(config.id, status=ClusterStatus.APPLYING)
             if not plan_path.is_file():
                 raise RuntimeError("Der geprüfte Terraform-Plan fehlt; bitte einen neuen Plan erstellen")
+            # A reviewed plan may remain queued while the Proxmox environment
+            # changes. Re-run the read-only collision checks directly before
+            # consuming and applying it to close that race window.
+            validate_proxmox(job, config, token, workspace)
+            invalidate_plan_authorization(config.id, status=ClusterStatus.APPLYING)
             try:
                 run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "tfplan"], terraform_dir, env, secrets)
             finally:
