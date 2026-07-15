@@ -22,7 +22,7 @@ The application is provided as prebuilt container images via the GitHub Containe
 
 For operation:
 
-- Docker und Docker Compose
+- Docker and Docker Compose
 - A reachable Proxmox host or Proxmox cluster
 - A cloud-init-capable QEMU VM template on the selected Proxmox node
 - A Proxmox API token with permissions to create, read, and delete VMs
