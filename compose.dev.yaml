@@ -1,0 +1,43 @@
+# Development override.
+#
+# Usage:
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build
+#
+# This keeps the production compose file usable while replacing the
+# pre-built GHCR images with local builds and restoring the source mount.
+
+services:
+  web:
+    image: k8s-universal-web:dev
+    build:
+      context: .
+      target: web
+    environment:
+      SOURCE_ROOT: /iac
+    volumes:
+      - ./:/iac:ro
+
+  worker:
+    image: k8s-universal-worker:dev
+    build:
+      context: .
+      target: worker
+    environment:
+      SOURCE_ROOT: /iac
+    volumes:
+      - ./:/iac:ro
+
+  test:
+    profiles: ["test"]
+    image: k8s-universal-test:dev
+    build:
+      context: .
+      target: test
+    command: ["pytest", "-q"]
+    environment:
+      DATABASE_URL: sqlite:////tmp/cluster-builder-tests.db
+      MASTER_KEY: test-master-key-that-is-never-used-in-production
+      SESSION_SECRET: test-session-secret-that-is-never-used-in-production
+      INITIAL_ADMIN_PASSWORD: test-admin-password
+      DATA_ROOT: /tmp/cluster-builder-data
+      SOURCE_ROOT: /workspace

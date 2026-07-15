@@ -1,10 +1,12 @@
+name: ${COMPOSE_PROJECT_NAME:-k8s-universal}
+
 services:
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: clusterbuilder
       POSTGRES_USER: clusterbuilder
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -15,17 +17,14 @@ services:
     restart: unless-stopped
 
   web:
-    build:
-      context: .
-      target: web
+    image: ${BUILDER_WEB_IMAGE:-ghcr.io/midniqhtvibes/k8s-universal-web}:${BUILDER_VERSION:-latest}
     env_file: ${BUILDER_ENV_FILE:-.env}
     environment:
-      DATABASE_URL: postgresql+psycopg://clusterbuilder:${POSTGRES_PASSWORD}@postgres/clusterbuilder
+      DATABASE_URL: postgresql+psycopg://clusterbuilder:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres/clusterbuilder
       DATA_ROOT: /data
-      SOURCE_ROOT: /iac
+      SOURCE_ROOT: /workspace
     volumes:
       - cluster-data:/data
-      - ./:/iac:ro
     ports:
       - "${BUILDER_BIND_ADDRESS:-127.0.0.1}:${BUILDER_PORT:-8000}:8000"
     depends_on:
@@ -39,35 +38,18 @@ services:
     restart: unless-stopped
 
   worker:
-    build:
-      context: .
-      target: worker
+    image: ${BUILDER_WORKER_IMAGE:-ghcr.io/midniqhtvibes/k8s-universal-worker}:${BUILDER_VERSION:-latest}
     env_file: ${BUILDER_ENV_FILE:-.env}
     environment:
-      DATABASE_URL: postgresql+psycopg://clusterbuilder:${POSTGRES_PASSWORD}@postgres/clusterbuilder
+      DATABASE_URL: postgresql+psycopg://clusterbuilder:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres/clusterbuilder
       DATA_ROOT: /data
-      SOURCE_ROOT: /iac
+      SOURCE_ROOT: /workspace
     volumes:
       - cluster-data:/data
-      - ./:/iac:ro
     depends_on:
       web:
         condition: service_healthy
     restart: unless-stopped
-
-  test:
-    profiles: ["test"]
-    build:
-      context: .
-      target: test
-    command: ["pytest", "-q"]
-    environment:
-      DATABASE_URL: sqlite:////tmp/cluster-builder-tests.db
-      MASTER_KEY: test-master-key-that-is-never-used-in-production
-      SESSION_SECRET: test-session-secret-that-is-never-used-in-production
-      INITIAL_ADMIN_PASSWORD: test-admin-password
-      DATA_ROOT: /tmp/cluster-builder-data
-      SOURCE_ROOT: /workspace
 
 volumes:
   postgres-data:

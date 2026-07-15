@@ -90,8 +90,8 @@ def test_ingress_test_commands_are_copyable_and_shell_safe():
     }]
 
     assert ingress_test_commands(documents, "10.200.50.150") == [
-        "curl -v -H 'Host: web.lab.local' http://10.200.50.150/",
-        "curl -v -H 'Host: web.lab.local' 'http://10.200.50.150/api?q=test value'",
+        'curl -v -H "Host: web.lab.local" "http://10.200.50.150/"',
+        'curl -v -H "Host: web.lab.local" "http://10.200.50.150/api?q=test value"',
     ]
 
 
@@ -121,7 +121,7 @@ def test_run_ingress_tests_logs_manual_curl_command_after_http_result(monkeypatc
     run_ingress_tests(SimpleNamespace(id="job-1"), documents, "10.200.50.150")
 
     output = "".join(log)
-    command = "curl -v -H 'Host: web.lab.local' http://10.200.50.150/"
+    command = 'curl -v -H "Host: web.lab.local" "http://10.200.50.150/"'
     assert "web.lab.local http://10.200.50.150/ -> HTTP 200" in output
     assert "Manueller Curl-Test" in output
     assert command in output
