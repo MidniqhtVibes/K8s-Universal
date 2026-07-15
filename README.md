@@ -1,59 +1,59 @@
 # Proxmox Kubernetes Cluster Builder
 
-Webbasierter Builder für HA-Kubernetes-Cluster auf Proxmox. Die Anwendung erzeugt aus einem Wizard Terraform- und Ansible-Konfigurationen, erstellt die Proxmox-VMs und installiert Kubernetes, Calico und optional Traefik.
+Web-based builder for HA Kubernetes clusters on Proxmox. The application generates Terraform and Ansible configurations from a wizard, creates the Proxmox VMs, and installs Kubernetes, Calico, and optionally Traefik.
 
-Die Anwendung wird als fertige Container-Images über die GitHub Container Registry (GHCR) bereitgestellt. Für den normalen Betrieb müssen die Images daher nicht lokal gebaut werden. Installationsabhängige Werte wie Passwörter, Secrets, Ports und Laufzeiteinstellungen werden über eine eigene `.env` konfiguriert.
+The application is provided as prebuilt container images via the GitHub Container Registry (GHCR). For normal operation, the images therefore do not need to be built locally. Installation-specific values such as passwords, secrets, ports, and runtime settings are configured through a dedicated `.env` file.
 
-## Funktionen
+## Features
 
-- Proxmox-Cluster-Erzeugung mit Load Balancern, Control Planes und Workern
-- Terraform Plan, Apply, Destroy Plan und Destroy über die Weboberfläche
-- Provisionierung über Terraform, Ansible und kubeadm
-- HAProxy und Keepalived für die Kubernetes-API-VIP
-- Calico als CNI und optional Traefik als Ingress Controller
-- Credentials für Proxmox API und SSH-Schlüsselverwaltung
-- Kubernetes-Web-Konsole für `kubectl`
-- Anwendungsvorlagen und Manifest-Bundles
-- Job-Recovery nach Worker-Neustart
-- Fertige Web- und Worker-Images über GHCR
-- Versionsbasierte Updates über `BUILDER_VERSION`
+- Proxmox cluster creation with load balancers, control planes, and workers
+- Terraform Plan, Apply, Destroy Plan, and Destroy through the web interface
+- Provisioning via Terraform, Ansible, and kubeadm
+- HAProxy and Keepalived for the Kubernetes API VIP
+- Calico as the CNI and optionally Traefik as the ingress controller
+- Credential management for the Proxmox API and SSH keys
+- Kubernetes web console for `kubectl`
+- Application templates and manifest bundles
+- Job recovery after worker restarts
+- Prebuilt web and worker images via GHCR
+- Version-based updates via `BUILDER_VERSION`
 
-## Voraussetzungen
+## Requirements
 
-Für den Betrieb:
+For operation:
 
 - Docker und Docker Compose
-- Ein erreichbarer Proxmox-Host oder Proxmox-Cluster
-- Ein cloud-init-fähiges QEMU-VM-Template auf dem ausgewählten Proxmox-Node
-- Proxmox API Token mit Rechten zum Erstellen, Lesen und Löschen von VMs
-- Freie IP-Adressen und VM-IDs für Load Balancer, Control Planes und Worker
-- Netzwerkzugriff vom Builder/Worker zu Proxmox
-- Netzwerkzugriff der erzeugten VMs ins Internet
-- Zugriff auf `ghcr.io`, sofern die Images direkt aus der GitHub Container Registry bezogen werden
+- A reachable Proxmox host or Proxmox cluster
+- A cloud-init-capable QEMU VM template on the selected Proxmox node
+- A Proxmox API token with permissions to create, read, and delete VMs
+- Free IP addresses and VM IDs for load balancers, control planes, and workers
+- Network access from the builder/worker to Proxmox
+- Internet access for the created VMs
+- Access to `ghcr.io` if the images are pulled directly from the GitHub Container Registry
 
-Für die lokale Entwicklung zusätzlich:
+Additionally, for local development:
 
 - Git
-- Ein Checkout des vollständigen Repositories
+- A checkout of the complete repository
 
-## Proxmox-Template vorbereiten
+## Preparing the Proxmox Template
 
-Das Repository enthält mit `proxmox/create-template.sh` ein einmaliges Host-Setupwerkzeug. Es wird direkt als `root` auf genau dem Proxmox-Node ausgeführt, der später im Wizard ausgewählt wird.
+The repository includes a one-time host setup tool at `proxmox/create-template.sh`. It is executed directly as `root` on the exact Proxmox node that will later be selected in the wizard.
 
-Das Skript läuft nicht im Builder-Container und wird weder von der Webanwendung noch von Ansible automatisch gestartet.
+The script does not run inside the builder container and is not started automatically by either the web application or Ansible.
 
-Es lädt ein offizielles Ubuntu-Cloud-Image über HTTPS, prüft dessen SHA-256-Wert, installiert Cloud-Init, SSH und den QEMU Guest Agent und erzeugt daraus ein QEMU-Template.
+It downloads an official Ubuntu cloud image over HTTPS, verifies its SHA-256 checksum, installs Cloud-Init, SSH, and the QEMU Guest Agent, and creates a QEMU template from it.
 
-Die VM-ID besitzt keinen festen Standardwert und muss im gesamten Proxmox-Cluster frei sein. Vorhandene VMs werden nicht überschrieben.
+The VM ID has no fixed default value and must be free across the entire Proxmox cluster. Existing VMs are not overwritten.
 
-Das Skript zuerst aus dem Repository auf den Zielnode kopieren:
+First copy the script from the repository to the target node:
 
 ```bash
 scp proxmox/create-template.sh root@pve-node:/root/create-template.sh
 ssh root@pve-node
 ```
 
-Danach auf dem Proxmox-Host ausführen. `9100` ist hier nur eine Beispiel-ID:
+Then run it on the Proxmox host. `9100` is only an example ID here:
 
 ```bash
 bash /root/create-template.sh \
@@ -64,47 +64,47 @@ bash /root/create-template.sh \
   --install-dependencies
 ```
 
-Ohne `--install-dependencies` verändert das Skript keine Hostpakete und bricht bei fehlenden Werkzeugen mit einer Erklärung ab.
+Without `--install-dependencies`, the script does not modify host packages and exits with an explanation if required tools are missing.
 
-Alle Optionen zeigt:
+To display all options:
 
 ```bash
 bash /root/create-template.sh --help
 ```
 
-Nach erfolgreichem Abschluss kann das Template später im Builder ausgewählt werden.
+After successful completion, the template can later be selected in the builder.
 
-## Setup mit fertigen Container-Images
+## Setup with Prebuilt Container Images
 
-Für den normalen Betrieb werden die Images nicht mehr lokal gebaut.
+For normal operation, the images are no longer built locally.
 
-Benötigt werden:
+Required files:
 
 ```text
 compose.yaml
 .env
 ```
 
-Als Vorlage für die Konfiguration dient `.env.example`.
+Use `.env.example` as the configuration template.
 
-### 1. `.env` erstellen
+### 1. Create `.env`
 
-Unter Linux:
+On Linux:
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 ```
 
-Unter PowerShell:
+On PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Danach die Werte in `.env` anpassen.
+Then adjust the values in `.env`.
 
-Beispiel:
+Example:
 
 ```env
 COMPOSE_PROJECT_NAME=k8s-universal
@@ -131,145 +131,145 @@ JOB_RETENTION_KEEP=100
 MANIFEST_REVISION_RETENTION_KEEP=30
 ```
 
-`MASTER_KEY` muss dauerhaft gleich bleiben. Wird der Wert geändert oder verloren, können gespeicherte verschlüsselte Credentials nicht mehr entschlüsselt werden.
+`MASTER_KEY` must remain unchanged permanently. If the value is changed or lost, stored encrypted credentials can no longer be decrypted.
 
-Für `POSTGRES_PASSWORD` wird aktuell ein URL-sicherer Wert empfohlen, da das Passwort in der `DATABASE_URL` verwendet wird.
+A URL-safe value is currently recommended for `POSTGRES_PASSWORD`, because the password is used inside `DATABASE_URL`.
 
-Zum Beispiel:
+Zum Example:
 
 ```bash
 openssl rand -hex 32
 ```
 
-### 2. Container-Images auswählen
+### 2. Select Container Images
 
-Die Images werden standardmäßig aus GHCR geladen:
+By default, the images are pulled from GHCR:
 
 ```text
 ghcr.io/midniqhtvibes/k8s-universal-web
 ghcr.io/midniqhtvibes/k8s-universal-worker
 ```
 
-Die gewünschte Version wird über `BUILDER_VERSION` festgelegt.
+The desired version is set via `BUILDER_VERSION`.
 
-Für eine feste Release-Version:
+For a fixed release version:
 
 ```env
 BUILDER_VERSION=1.0.0
 ```
 
-Für Tests des aktuellen `main`-Standes:
+For testing the current `main` branch state:
 
 ```env
 BUILDER_VERSION=edge
 ```
 
-`latest` verweist auf das zuletzt veröffentlichte Release.
+`latest` points to the most recently published release.
 
-Für produktive Installationen wird eine feste Versionsnummer empfohlen.
+A fixed version number is recommended for production installations.
 
-### 3. Images herunterladen
+### 3. Pull the Images
 
 ```bash
 docker compose pull
 ```
 
-Falls die GHCR-Packages privat sind, muss sich der Docker-Host vorher anmelden:
+If the GHCR packages are private, the Docker host must log in first:
 
 ```bash
 echo "$CR_PAT" | docker login ghcr.io -u MidniqhtVibes --password-stdin
 ```
 
-Bei öffentlichen Images ist kein Login erforderlich.
+No login is required for public images.
 
-### 4. Stack starten
+### 4. Start the Stack
 
 ```bash
 docker compose up -d
 ```
 
-Status prüfen:
+Check the status:
 
 ```bash
 docker compose ps
 ```
 
-Logs prüfen:
+Check the logs:
 
 ```bash
 docker compose logs -f web worker
 ```
 
-Die Weboberfläche ist standardmäßig erreichbar unter:
+By default, the web interface is available at:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Der initiale Login erfolgt mit dem Benutzer `admin` und dem Wert aus `INITIAL_ADMIN_PASSWORD`.
+The initial login uses the username `admin` and the value from `INITIAL_ADMIN_PASSWORD`.
 
-## Persistente Daten
+## Persistent Data
 
-Der Stack verwendet zwei Docker-Volumes:
+The stack uses two Docker volumes:
 
 ```text
 postgres-data
 cluster-data
 ```
 
-`postgres-data` enthält die PostgreSQL-Datenbank.
+`postgres-data` contains the PostgreSQL database.
 
-`cluster-data` enthält installationsabhängige Arbeitsdaten des Builders, darunter Cluster-Workspaces und generierte Dateien.
+`cluster-data` contains installation-specific builder working data, including cluster workspaces and generated files.
 
-Die Volumes bleiben bei einem normalen Container-Update bestehen.
+The volumes remain intact during a normal container update.
 
-Sie werden erst entfernt, wenn Docker-Volumes ausdrücklich gelöscht werden.
+They are only removed when Docker volumes are explicitly deleted.
 
 ## Update
 
-Für ein Update auf eine neue Version wird kein lokaler Docker-Build benötigt.
+Updating to a new version does not require a local Docker build.
 
-In `.env` die gewünschte Version ändern:
+Change the desired version in `.env`:
 
 ```env
 BUILDER_VERSION=1.1.0
 ```
 
-Danach:
+Then run:
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-Die Datenbankmigrationen laufen beim Start des `web`-Containers automatisch.
+Database migrations run automatically when the `web` container starts.
 
-Bestehende Daten in `postgres-data` und `cluster-data` bleiben erhalten.
+Existing data in `postgres-data` and `cluster-data` remains intact.
 
-Vor größeren Versionssprüngen sollte trotzdem ein Backup der persistenten Daten angelegt werden.
+A backup of the persistent data should still be created before major version upgrades.
 
 ## Rollback
 
-Für ein einfaches Container-Rollback kann wieder eine ältere Image-Version gesetzt werden:
+For a simple container rollback, set an older image version again:
 
 ```env
 BUILDER_VERSION=1.0.0
 ```
 
-Danach:
+Then run:
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-Ein Image-Rollback garantiert jedoch nicht automatisch, dass bereits ausgeführte Datenbankmigrationen rückwärtskompatibel sind.
+However, an image rollback does not automatically guarantee that previously executed database migrations are backward compatible.
 
-## Lokale Entwicklung
+## Local Development
 
-Für die lokale Entwicklung werden `compose.yaml` und `compose.dev.yaml` gemeinsam verwendet.
+For local development, `compose.yaml` and `compose.dev.yaml` are used together.
 
-Unter Linux:
+On Linux:
 
 ```bash
 docker compose \
@@ -278,54 +278,54 @@ docker compose \
   up -d --build
 ```
 
-Unter PowerShell:
+On PowerShell:
 
 ```powershell
 docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 ```
 
-Im Development-Setup werden Web und Worker lokal aus dem Dockerfile gebaut und das Repository zusätzlich nach `/iac` eingebunden.
+In the development setup, the web and worker images are built locally from the Dockerfile, and the repository is additionally mounted to `/iac`.
 
-Dadurch kann weiterhin direkt mit den lokalen Terraform-, Ansible- und Anwendungdateien gearbeitet werden.
+This allows direct work with the local Terraform, Ansible, and application files.
 
-Lokale Tests können über das Test-Profil gestartet werden:
+Local tests can be run through the test profile:
 
 ```powershell
 docker compose -f compose.yaml -f compose.dev.yaml --profile test run --rm test
 ```
 
-## GitHub Actions und GHCR
+## GitHub Actions and GHCR
 
-Die CI/CD-Pipeline liegt unter:
+The CI/CD pipeline is located at:
 
 ```text
 .github/workflows/containers.yml
 ```
 
-Bei einem Pull Request gegen `main`:
+For a pull request targeting `main`:
 
-- wird das Test-Image gebaut
-- werden die Pytest-Tests ausgeführt
-- werden Web- und Worker-Images testweise gebaut
-- es erfolgt kein Push nach GHCR
+- the test image is built
+- the Pytest tests are executed
+- the web and worker images are built for validation
+- no images are pushed to GHCR
 
-Bei einem Push auf `main` werden nach erfolgreichen Tests unter anderem folgende Tags veröffentlicht:
+For a push to `main`, the following tags are published after successful tests:
 
 ```text
 ghcr.io/midniqhtvibes/k8s-universal-web:edge
 ghcr.io/midniqhtvibes/k8s-universal-worker:edge
 ```
 
-Zusätzlich werden SHA-basierte Tags erzeugt.
+SHA-based tags are generated as well.
 
-Ein Release wird über einen Git-Tag ausgelöst:
+A release is triggered by a Git tag:
 
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Dadurch werden unter anderem veröffentlicht:
+This publishes, among others:
 
 ```text
 ghcr.io/midniqhtvibes/k8s-universal-web:1.0.0
@@ -335,9 +335,9 @@ ghcr.io/midniqhtvibes/k8s-universal-worker:1.0.0
 ghcr.io/midniqhtvibes/k8s-universal-worker:latest
 ```
 
-## Wartung
+## Maintenance
 
-Nützliche Befehle:
+Useful commands:
 
 ```bash
 docker compose ps
@@ -345,24 +345,24 @@ docker compose logs -f web worker
 docker compose restart web worker
 ```
 
-Neue Images laden und Container aktualisieren:
+Pull new images and update the containers:
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-Container stoppen:
+Stop the containers:
 
 ```bash
 docker compose down
 ```
 
-Die persistenten Volumes bleiben dabei erhalten.
+The persistent volumes remain intact.
 
-## Sicherheit
+## Security
 
-Folgende Dateien und Daten dürfen nicht in Git eingecheckt oder in Container-Images eingebaut werden:
+The following files and data must not be committed to Git or included in container images:
 
 ```text
 .env
@@ -374,20 +374,20 @@ Cluster-Workspaces
 Datenbankdaten
 ```
 
-Ins Repository gehört nur die Vorlage:
+Only the template belongs in the repository:
 
 ```text
 .env.example
 ```
 
-`MASTER_KEY`, `SESSION_SECRET`, `POSTGRES_PASSWORD` und `INITIAL_ADMIN_PASSWORD` müssen pro Installation individuell gesetzt werden.
+`MASTER_KEY`, `SESSION_SECRET`, `POSTGRES_PASSWORD`, and `INITIAL_ADMIN_PASSWORD` must be set individually for each installation.
 
-## Hinweise
+## Notes
 
-- Für produktive Installationen sollte `BUILDER_VERSION` auf eine feste Version gesetzt werden.
-- `edge` eignet sich für Tests des aktuellen `main`-Branches.
-- `latest` verweist auf das zuletzt veröffentlichte Release.
-- `MASTER_KEY` muss dauerhaft gesichert und unverändert aufbewahrt werden.
-- Bei privaten GHCR-Images ist vor `docker compose pull` eine Anmeldung bei `ghcr.io` erforderlich.
-- Wenn externe Downloads rate-limitiert werden, den Vorgang später erneut starten.
-- Bei DNS- oder APT-Fehlern zuerst Gateway, DNS und Internetzugriff der Ziel-VMs prüfen.
+- For production installations, `BUILDER_VERSION` should be pinned to a fixed version.
+- `edge` is suitable for testing the current `main` branch.
+- `latest` points to the most recently published release.
+- `MASTER_KEY` must be stored securely and kept unchanged.
+- For private GHCR images, authentication with `ghcr.io` is required before running `docker compose pull`.
+- If external downloads are rate-limited, retry the operation later.
+- For DNS or APT errors, first check the gateway, DNS, and internet access of the target VMs.
