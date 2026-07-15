@@ -387,7 +387,7 @@ def ingress_test_targets(documents: list[dict], api_vip: str) -> list[tuple[str,
 def ingress_test_commands(documents: list[dict], api_vip: str) -> list[str]:
     """Build copyable, shell-safe curl commands for all declared Ingress paths."""
     return [
-        shlex.join(["curl", "-v", "-H", f"Host: {host}", url])
+        f'curl -v -H "Host: {host}" "{url}"'
         for url, host in ingress_test_targets(documents, api_vip)
     ]
 
