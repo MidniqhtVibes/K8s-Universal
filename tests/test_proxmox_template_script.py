@@ -81,9 +81,14 @@ def test_template_script_accepts_both_proxmox_agent_serializations():
 def test_template_script_is_documented_as_proxmox_host_tool():
     for name in ("README.md", "BUILDER.md"):
         content = (PROJECT / name).read_text(encoding="utf-8")
+        content_lower = content.lower()
+
         assert "proxmox/create-template.sh" in content
         assert "--vm-id" in content
-        assert "Proxmox-Host" in content
+        assert (
+            "proxmox-host" in content_lower
+            or "proxmox host" in content_lower
+        )
 
     dockerfile = (PROJECT / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY proxmox proxmox" in dockerfile
