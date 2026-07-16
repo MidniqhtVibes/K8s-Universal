@@ -353,8 +353,6 @@ def validate_manifest_content(content: str) -> list[dict]:
                 raise ValueError(f"Pflichtfeld '{key}' fehlt")
         if not isinstance(document["metadata"], dict) or not document["metadata"].get("name"):
             raise ValueError("metadata.name fehlt")
-        if document["kind"] == "Secret":
-            raise ValueError("Unverschlüsselte Kubernetes-Secrets sind im Manifest-Editor gesperrt")
     return documents
 
 
