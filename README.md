@@ -39,11 +39,13 @@ Additionally, for local development:
 - Git
 - A checkout of the complete repository
 
-## Preparing the Proxmox Template
+## Preparing the Proxmox Templates
 
-The repository includes a one-time host setup tool at `proxmox/create-template.sh`. It is executed directly as `root` on the exact Proxmox node that will later be selected in the wizard.
+The repository includes two one-time host setup tools. `proxmox/create-template.sh` creates the Ubuntu template used by kubeadm clusters and by Talos load balancers. `proxmox/create-talos-template.sh` creates the separate Talos NoCloud template used by Talos control-plane and worker nodes. Both scripts are executed directly as `root` on the exact Proxmox node that will later be selected in the wizard.
 
-The script does not run inside the builder container and is not started automatically by either the web application or Ansible.
+The scripts do not run inside the builder container and are not started automatically by either the web application or Ansible.
+
+### Ubuntu template
 
 It downloads an official Ubuntu cloud image over HTTPS, verifies its SHA-256 checksum, installs Cloud-Init, SSH, and the QEMU Guest Agent, and creates a QEMU template from it.
 
@@ -76,6 +78,29 @@ bash /root/create-template.sh --help
 ```
 
 After successful completion, the template can later be selected in the builder.
+
+### Talos NoCloud template
+
+For a Talos cluster, copy and run the separate helper. `9200` is another example ID and must differ from the Ubuntu template ID and all cluster VM IDs:
+
+```bash
+scp proxmox/create-talos-template.sh root@pve-node:/root/create-talos-template.sh
+ssh root@pve-node
+
+bash /root/create-talos-template.sh \
+  --vm-id 9200 \
+  --storage local-lvm \
+  --bridge vmbr0 \
+  --talos-version v1.13.6 \
+  --install-disk /dev/sda \
+  --install-dependencies
+```
+
+The helper downloads the exact supported vanilla Talos NoCloud image, verifies it against the repository-pinned SHA-256 value, and creates an OVMF/q35 template with a normal VirtIO-SCSI controller, EFI and NoCloud disks, fixed memory, and no QEMU Guest Agent. It never embeds a Machine Config, PKI, SSH key, hostname, or IP address.
+
+`/dev/sda` (`scsi0`) is the recommended default. The helper can instead create a `/dev/vda` (`virtio0`) template, but the **Talos installation disk** selected in the wizard must exactly match the value used while creating that template. Do not select `/dev/vda` for a template that was built with `/dev/sda`.
+
+Talos clusters therefore select two different template IDs in the wizard: the Talos template for control-plane/workers and the Ubuntu template for the load balancers.
 
 ## Setup with Prebuilt Container Images
 

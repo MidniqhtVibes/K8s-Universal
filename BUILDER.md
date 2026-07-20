@@ -7,15 +7,19 @@ Der Cluster Builder ist die Weboberfläche für dieses Repository. Er verwaltet 
 - Ubuntu-Orchestrator mit Docker Engine und Docker Compose
 - Netzwerkzugriff vom Orchestrator auf Proxmox und alle VM-IP-Adressen
 - QEMU-Cloud-Init-Template auf dem Zielnode mit Ubuntu, QEMU Guest Agent und funktionierendem Cloud-Init
+- fuer Talos zusaetzlich ein getrenntes Talos-NoCloud-QEMU-Template auf dem Zielnode
 - reservierte Node-IP-Adressen und eine freie API-VIP
 - VRRP zwischen den Load-Balancern muss im Netzwerk erlaubt sein
 
 ## Einmaliges Proxmox-Host-Setup
 
-`proxmox/create-template.sh` ist Bestandteil des Releases, aber bewusst kein
-CLI-Zugang zur Webanwendung. Es bereitet ausschliesslich die externe
-Proxmox-Voraussetzung vor, aus der Terraform spaeter die VMs klont. Das Skript
-wird niemals von Web, Worker, Docker Compose oder Ansible ausgefuehrt.
+`proxmox/create-template.sh` und `proxmox/create-talos-template.sh` sind
+Bestandteil des Releases, aber bewusst kein CLI-Zugang zur Webanwendung. Sie
+bereiten ausschliesslich die externen Proxmox-Voraussetzungen vor, aus denen
+Terraform spaeter die VMs klont. Die Skripte werden niemals von Web, Worker,
+Docker Compose oder Ansible ausgefuehrt.
+
+### Ubuntu-Template
 
 Es muss als `root` direkt auf dem Proxmox-Host laufen, der im Wizard als Node
 ausgewaehlt wird:
@@ -53,6 +57,46 @@ erhalten. Fehlende Hostwerkzeuge werden nur mit dem ausdruecklichen Schalter
 
 Nach der Erstellung muss die Web-Discovery aufgerufen und dort genau das QEMU-
 Template mit der ausgegebenen ID auf demselben Node ausgewaehlt werden.
+
+### Talos-NoCloud-Template
+
+Fuer Control Planes und Worker eines Talos-Clusters gibt es ein separates,
+stilgleich abgesichertes Hostskript:
+
+```bash
+bash proxmox/create-talos-template.sh \
+  --vm-id 9200 \
+  --storage local-lvm \
+  --bridge vmbr0 \
+  --talos-version v1.13.6 \
+  --install-disk /dev/sda \
+  --install-dependencies
+```
+
+Auch `9200` ist nur ein Beispiel. Diese ID muss sich von der Ubuntu-Template-ID
+und allen Node-VM-IDs unterscheiden. Das Skript laedt das exakt unterstuetzte
+Vanilla-NoCloud-Image ueber HTTPS und vergleicht es mit dem im Repository fuer
+dieses Image festgehaltenen SHA-256-Wert. Eine abweichende `--image-url` ist nur
+zusammen mit einem expliziten `--image-sha256` zulaessig. Image Factory bietet
+fuer den oeffentlichen Download derzeit keinen publisherseitigen
+Pruefsummen-Endpunkt; eine unerwartete Aenderung des gepinnten Factory-Objekts
+stoppt deshalb bewusst, bis der Pin geprueft und aktualisiert wurde.
+
+Das erzeugte Template verwendet OVMF/UEFI, q35, eine EFI-Disk, deaktiviertes
+Memory Ballooning und keinen QEMU Guest Agent. Es enthaelt weder Machine Config
+noch PKI, SSH-Zugang, Hostname oder IP-Adresse. Eine NoCloud-Disk ist bereits
+vorhanden, damit Terraform pro Clone die statische Netzwerkkonfiguration
+bereitstellen kann.
+
+Standard und Empfehlung sind `--install-disk /dev/sda` und damit `scsi0` an
+einem normalen `virtio-scsi-pci`-Controller. Optional erzeugt
+`--install-disk /dev/vda` das Template physisch mit `virtio0`. Der Wert im
+Wizard muss exakt zum jeweiligen Template passen; ein `scsi0`-Template darf
+nicht einfach als `/dev/vda` verwendet werden. Weitere Parameter zeigt
+`bash proxmox/create-talos-template.sh --help`.
+
+Ein Talos-Cluster benoetigt weiterhin das getrennte Ubuntu-Template aus dem
+vorigen Abschnitt fuer seine SSH-verwalteten Load Balancer.
 
 ## Installation
 
@@ -113,7 +157,9 @@ Der Proxmox-Abschnitt benötigt zwei verschiedene vorhandene Templates:
 - **Talos-Template** für Control Planes und Worker
 - **Ubuntu-/Linux-Template** für die SSH-verwalteten Load Balancer
 
-Das Talos-Template wird nicht vom Builder erstellt. Es muss ein
+Das Talos-Template wird nicht automatisch von Webanwendung oder Worker
+erstellt; dafuer steht das einmalig auf dem Proxmox-Host auszufuehrende
+`proxmox/create-talos-template.sh` bereit. Alternativ muss es ein gleichwertiges
 unkonfiguriertes NoCloud-Template der ausgewählten Talos-Version sein. Die von
 Terraform erzeugte NoCloud-Netzwerkkonfiguration muss bereits im Maintenance
 Mode die im Wizard gewählte statische IP, das Gateway und DNS bereitstellen;
