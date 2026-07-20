@@ -1,0 +1,5 @@
+{% set registry_scheme = 'http' if container_registry_use_http else 'https' %}
+server = "{{ registry_scheme }}://{{ container_registry_endpoint }}"
+
+[host."{{ registry_scheme }}://{{ container_registry_endpoint }}"]
+  capabilities = ["pull", "resolve"]

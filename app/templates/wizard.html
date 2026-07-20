@@ -22,6 +22,20 @@
 </div>
 {% endif %}
 
+{% if not default_configuration_exists and action == '/clusters' %}
+<div class="alert alert-info" role="status">
+  <span class="alert-icon">{{ ui.icon('info') }}</span>
+  <div>
+    <strong>Keine Standard-Konfiguration vorhanden</strong>
+    <p>Die angezeigten Systemwerte sind nicht gespeichert. Du kannst alle Werte hier bearbeiten oder zuerst eigene Standardwerte einrichten.</p>
+    <div class="page-actions">
+      <a class="button secondary small" href="/settings">Standardwerte einrichten</a>
+      <a class="button secondary small" href="#wizard">Cluster manuell konfigurieren</a>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <form method="post" action="{{ action }}" id="wizard" class="stack form-page">
   <input type="hidden" name="_submitted" value="1">
 
@@ -81,6 +95,11 @@
         Template-VM-ID
         <input type="number" name="template_vm_id" id="template-vm-id" list="proxmox-templates" value="{{ values.get('template_vm_id','') }}" placeholder="Nach Discovery auswählen" required>
       </label>
+      <div class="template-disk-summary" aria-live="polite">
+        <span>Template-Disk</span>
+        <strong id="template-disk-value">Noch nicht ermittelt</strong>
+        <small id="template-disk-message">Proxmox-Ressourcen erkennen und anschließend ein Template auswählen.</small>
+      </div>
       <label>
         Netzwerk-Bridge
         <input name="bridge" id="bridge" list="proxmox-bridges" value="{{ values.get('bridge','vmbr0') }}" required>
@@ -167,7 +186,7 @@
           <label>VM-ID Start<input type="number" name="lb_vm_id_start" value="{{ values.get('lb_vm_id_start','301') }}"></label>
           <label>CPU-Kerne<input type="number" name="lb_cores" value="{{ values.get('lb_cores','1') }}"></label>
           <label>RAM in MB<input type="number" name="lb_memory" value="{{ values.get('lb_memory','2048') }}"></label>
-          <label>Disk in GB<input type="number" name="lb_disk" value="{{ values.get('lb_disk','30') }}"></label>
+          <label>Disk in GB<input type="number" name="lb_disk" min="8" value="{{ values.get('lb_disk','30') }}"><span class="field-hint template-disk-minimum">Statisches Minimum: 8 GB</span></label>
         </div>
       </article>
 
@@ -183,7 +202,7 @@
           <label>VM-ID Start<input type="number" name="cp_vm_id_start" value="{{ values.get('cp_vm_id_start','311') }}"></label>
           <label>CPU-Kerne<input type="number" name="cp_cores" value="{{ values.get('cp_cores','2') }}"></label>
           <label>RAM in MB<input type="number" name="cp_memory" value="{{ values.get('cp_memory','4096') }}"></label>
-          <label>Disk in GB<input type="number" name="cp_disk" value="{{ values.get('cp_disk','40') }}"></label>
+          <label>Disk in GB<input type="number" name="cp_disk" min="8" value="{{ values.get('cp_disk','40') }}"><span class="field-hint template-disk-minimum">Statisches Minimum: 8 GB</span></label>
         </div>
       </article>
 
@@ -195,7 +214,7 @@
           <label>VM-ID Start<input type="number" name="worker_vm_id_start" value="{{ values.get('worker_vm_id_start','321') }}"></label>
           <label>CPU-Kerne<input type="number" name="worker_cores" value="{{ values.get('worker_cores','2') }}"></label>
           <label>RAM in MB<input type="number" name="worker_memory" value="{{ values.get('worker_memory','4096') }}"></label>
-          <label>Disk in GB<input type="number" name="worker_disk" value="{{ values.get('worker_disk','50') }}"></label>
+          <label>Disk in GB<input type="number" name="worker_disk" min="8" value="{{ values.get('worker_disk','50') }}"><span class="field-hint template-disk-minimum">Statisches Minimum: 8 GB</span></label>
         </div>
       </article>
     </div>
@@ -243,6 +262,77 @@
         <span class="switch-control" aria-hidden="true"></span>
         <span class="switch-copy"><strong>Traefik installieren</strong><small>Stellt einen Ingress-Controller für HTTP- und HTTPS-Dienste bereit.</small></span>
       </label>
+    </div>
+
+    <div class="form-subsection registry-section" aria-labelledby="registry-heading">
+      <div class="form-subsection-heading">
+        <div>
+          <p class="eyebrow">Optional</p>
+          <h3 id="registry-heading">Container Registry</h3>
+          <p>Konfiguriert eine private Registry auf allen Kubernetes-Nodes, unabhängig vom gewählten Provisioner.</p>
+        </div>
+      </div>
+
+      <label class="switch-field wide registry-enable-field">
+        <input
+          type="checkbox"
+          name="registry_enabled"
+          id="registry-enabled"
+          aria-controls="registry-options"
+          aria-expanded="{% if values.get('registry_enabled', '') == 'on' %}true{% else %}false{% endif %}"
+          {% if values.get('registry_enabled', '') == 'on' %}checked{% endif %}
+        >
+        <span class="switch-control" aria-hidden="true"></span>
+        <span class="switch-copy">
+          <strong>Private Registry für den Cluster konfigurieren</strong>
+          <small>Die Einstellung gilt für Control Planes und Worker, nicht für Load Balancer.</small>
+        </span>
+      </label>
+
+      <div class="registry-options" id="registry-options" {% if values.get('registry_enabled', '') != 'on' %}hidden{% endif %}>
+        <label class="registry-endpoint-field">
+          Registry-Adresse
+          <input
+            name="registry_endpoint"
+            id="registry-endpoint"
+            value="{{ values.get('registry_endpoint', '') }}"
+            placeholder="10.200.50.240:5000"
+            pattern="[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?:[0-9]{1,5}"
+            maxlength="259"
+            autocapitalize="none"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="registry-endpoint-hint registry-endpoint-error"
+            {% if values.get('registry_enabled', '') == 'on' %}required{% else %}disabled{% endif %}
+          >
+          <span class="field-hint" id="registry-endpoint-hint">Nur <code>host:port</code>, ohne <code>http://</code>, <code>https://</code> oder Pfad.</span>
+          <span class="field-error hidden" id="registry-endpoint-error" role="alert"></span>
+        </label>
+
+        <label class="switch-field registry-http-field">
+          <input
+            type="checkbox"
+            name="registry_use_http"
+            id="registry-use-http"
+            aria-controls="registry-http-warning"
+            {% if values.get('registry_use_http', '') == 'on' %}checked{% endif %}
+            {% if values.get('registry_enabled', '') != 'on' %}disabled{% endif %}
+          >
+          <span class="switch-control" aria-hidden="true"></span>
+          <span class="switch-copy">
+            <strong>Registry verwendet unverschlüsseltes HTTP</strong>
+            <small>Standardmäßig wird die Registry sicher über HTTPS angesprochen.</small>
+          </span>
+        </label>
+
+        <div class="alert alert-warning registry-http-warning" id="registry-http-warning" role="status" {% if values.get('registry_enabled', '') != 'on' or values.get('registry_use_http', '') != 'on' %}hidden{% endif %}>
+          <span class="alert-icon">{{ ui.icon('alert') }}</span>
+          <div>
+            <strong>Unsichere HTTP-Verbindung</strong>
+            <p>HTTP sollte nur für vertrauenswürdige interne Test- oder Lab-Netze verwendet werden. Für produktive Umgebungen sollte die Registry über HTTPS bereitgestellt werden.</p>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 

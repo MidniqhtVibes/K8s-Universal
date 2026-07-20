@@ -1,4 +1,5 @@
 import ipaddress
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -32,21 +33,66 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "lb_count": 2,
     "cp_count": 3,
     "worker_count": 2,
+    "proxmox_node": "pve",
+    "datastore": "local-lvm",
+    "bridge": "vmbr0",
+    "vlan_id": "",
+    "ssh_user": "ubuntu",
+    "kubernetes_version": "v1.36",
+    "calico_version": "v3.32.0",
+    "ingress_enabled": True,
+    "traefik_replicas": 2,
+    "http_node_port": 30080,
+    "https_node_port": 30443,
+    "lb_cores": 1,
+    "lb_memory": 2048,
+    "lb_disk": 30,
+    "cp_cores": 2,
+    "cp_memory": 4096,
+    "cp_disk": 40,
+    "worker_cores": 2,
+    "worker_memory": 4096,
+    "worker_disk": 50,
     "reserved_ips": "",
 }
 
 
-def get_preferences(db: Session) -> Preference:
-    preference = db.get(Preference, 1)
-    if preference is None:
-        preference = Preference(id=1, config=dict(DEFAULT_PREFERENCES))
-        db.add(preference)
-        db.commit()
-    else:
-        merged = dict(DEFAULT_PREFERENCES)
-        merged.update(preference.config or {})
-        preference.config = merged
-    return preference
+def get_preferences(db: Session) -> Preference | None:
+    """Return only explicitly persisted defaults without writing on reads."""
+    return db.get(Preference, 1)
+
+
+def effective_preferences(db: Session) -> dict[str, Any]:
+    """Merge persisted user defaults over non-persistent system fallbacks."""
+    preference = get_preferences(db)
+    merged = dict(DEFAULT_PREFERENCES)
+    if preference is not None:
+        merged.update({
+            key: value
+            for key, value in (preference.config or {}).items()
+            if key in DEFAULT_PREFERENCES
+        })
+    return merged
+
+
+def wizard_default_values(preferences: dict[str, Any]) -> dict[str, str]:
+    """Map only reusable, non-secret defaults into a new-cluster form."""
+    fields = (
+        "network_cidr", "gateway", "dns_servers", "pod_cidr", "service_cidr",
+        "lb_count", "cp_count", "worker_count", "proxmox_node", "datastore",
+        "bridge", "vlan_id", "ssh_user", "kubernetes_version", "calico_version",
+        "traefik_replicas", "http_node_port", "https_node_port", "lb_cores",
+        "lb_memory", "lb_disk", "cp_cores", "cp_memory", "cp_disk",
+        "worker_cores", "worker_memory", "worker_disk",
+    )
+    values = {field: str(preferences[field]) for field in fields}
+    values["api_vip"] = str(preferences["vip_pool_start"])
+    for role in ("lb", "cp", "worker"):
+        values[f"{role}_ip_start"] = str(preferences[f"{role}_ip_start"])
+        values[f"{role}_vm_id_start"] = str(preferences[f"{role}_vm_id_start"])
+    values["vm_name_include_cluster"] = "on" if preferences["vm_name_include_cluster"] else ""
+    values["ingress_enabled"] = "on" if preferences["ingress_enabled"] else ""
+    return values
 
 
 def parse_reserved_ips(value: str) -> set[ipaddress.IPv4Address]:
@@ -107,7 +153,7 @@ def suggest_allocations(
     exclude_cluster_id: str | None = None,
     extra_used_vm_ids: set[int] | None = None,
 ) -> dict[str, Any]:
-    preferences = get_preferences(db).config
+    preferences = effective_preferences(db)
     counts = {
         "lb": lb_count or int(preferences["lb_count"]),
         "cp": cp_count or int(preferences["cp_count"]),
@@ -136,7 +182,7 @@ def suggest_allocations(
 
 def validate_preference_config(config: dict[str, Any]) -> dict[str, Any]:
     merged = dict(DEFAULT_PREFERENCES)
-    merged.update(config)
+    merged.update({key: value for key, value in config.items() if key in DEFAULT_PREFERENCES})
     network = ipaddress.ip_network(str(merged["network_cidr"]), strict=True)
     if not isinstance(network, ipaddress.IPv4Network):
         raise ValueError("Nur IPv4-Netze werden unterstützt")
@@ -194,12 +240,57 @@ def validate_preference_config(config: dict[str, Any]) -> dict[str, Any]:
         id_capacity = int(merged[f"{role}_vm_id_end"]) - int(merged[f"{role}_vm_id_start"]) + 1
         if count > ip_capacity or count > id_capacity:
             raise ValueError(f"Der Pool für {role} ist kleiner als die Standardanzahl")
+    for field in ("proxmox_node", "datastore", "bridge", "ssh_user"):
+        value = str(merged[field]).strip()
+        if not value or len(value) > 120:
+            raise ValueError(f"Ungültiger Standardwert: {field}")
+        merged[field] = value
+    vlan_id = str(merged.get("vlan_id", "")).strip()
+    if vlan_id:
+        vlan_number = int(vlan_id)
+        if not 1 <= vlan_number <= 4094:
+            raise ValueError("VLAN-ID muss zwischen 1 und 4094 liegen")
+        merged["vlan_id"] = vlan_number
+    else:
+        merged["vlan_id"] = ""
+    if merged["kubernetes_version"] != "v1.36":
+        raise ValueError("Derzeit wird nur Kubernetes v1.36 unterstützt")
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", str(merged["calico_version"])):
+        raise ValueError("Ungültige Calico-Version")
+    for role in ("lb", "cp", "worker"):
+        cores = int(merged[f"{role}_cores"])
+        memory = int(merged[f"{role}_memory"])
+        disk = int(merged[f"{role}_disk"])
+        if not 1 <= cores <= 256:
+            raise ValueError(f"Ungültige Standard-CPU-Anzahl: {role}")
+        if memory < 512:
+            raise ValueError(f"Standard-RAM für {role} muss mindestens 512 MB betragen")
+        if disk < 8:
+            raise ValueError(f"Standard-Disk für {role} muss mindestens 8 GB betragen")
+        merged[f"{role}_cores"] = cores
+        merged[f"{role}_memory"] = memory
+        merged[f"{role}_disk"] = disk
+    replicas = int(merged["traefik_replicas"])
+    http_port = int(merged["http_node_port"])
+    https_port = int(merged["https_node_port"])
+    if replicas < 1:
+        raise ValueError("Traefik benötigt mindestens eine Replik")
+    if not 30000 <= http_port <= 32767 or not 30000 <= https_port <= 32767:
+        raise ValueError("Traefik-NodePorts müssen zwischen 30000 und 32767 liegen")
+    if http_port == https_port:
+        raise ValueError("HTTP- und HTTPS-NodePort müssen verschieden sein")
+    merged["traefik_replicas"] = replicas
+    merged["http_node_port"] = http_port
+    merged["https_node_port"] = https_port
+    merged["auto_suggest"] = bool(merged["auto_suggest"])
+    merged["vm_name_include_cluster"] = bool(merged["vm_name_include_cluster"])
+    merged["ingress_enabled"] = bool(merged["ingress_enabled"])
     return merged
 
 
 def validate_cluster_allocations(db: Session, config: Any) -> None:
     """Reject allocations owned by another active builder cluster or reserved in settings."""
-    preferences = get_preferences(db).config
+    preferences = effective_preferences(db)
     used_ips, used_ids = used_allocations(db, exclude_cluster_id=str(config.id))
     reserved_ips = parse_reserved_ips(str(preferences.get("reserved_ips", "")))
     existing = db.get(Cluster, str(config.id))

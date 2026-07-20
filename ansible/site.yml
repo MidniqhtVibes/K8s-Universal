@@ -4,6 +4,7 @@
 - import_playbook: playbooks/01-bootstrap-os.yml
 - import_playbook: playbooks/02-loadbalancer.yml
 - import_playbook: playbooks/03-containerd.yml
+- import_playbook: playbooks/03-container-registry.yml
 - import_playbook: playbooks/04-kubernetes-packages.yml
 - import_playbook: playbooks/05-init-control-plane.yml
 - import_playbook: playbooks/06-join-control-planes.yml

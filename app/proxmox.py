@@ -7,6 +7,22 @@ class ProxmoxError(RuntimeError):
     pass
 
 
+def template_disk_gb_from_bytes(value: object) -> int | None:
+    """Normalize Proxmox ``maxdisk`` bytes to a fail-closed GiB minimum."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        size_bytes = value
+    elif isinstance(value, str) and value.isascii() and value.isdigit():
+        size_bytes = int(value)
+    else:
+        return None
+    if size_bytes <= 0:
+        return None
+    gibibyte = 1024 ** 3
+    return (size_bytes + gibibyte - 1) // gibibyte
+
+
 class ProxmoxClient:
     def __init__(self, endpoint: str, api_token: str, verify_tls: bool = True) -> None:
         parsed = urlsplit(endpoint.strip())
@@ -34,7 +50,18 @@ class ProxmoxClient:
     def discover(self) -> dict:
         nodes = self.get("nodes")
         resources = self.get("cluster/resources", type="vm")
-        result = {"nodes": nodes, "vms": resources, "details": {}}
+        normalized_resources = []
+        for resource in resources if isinstance(resources, list) else []:
+            if not isinstance(resource, dict):
+                continue
+            item = dict(resource)
+            if (
+                item.get("template") in (1, True, "1")
+                and item.get("type") == "qemu"
+            ):
+                item["template_disk_gb"] = template_disk_gb_from_bytes(item.get("maxdisk"))
+            normalized_resources.append(item)
+        result = {"nodes": nodes, "vms": normalized_resources, "details": {}}
         for node in nodes if isinstance(nodes, list) else []:
             name = node["node"]
             networks = self.get(f"nodes/{name}/network", type="bridge")

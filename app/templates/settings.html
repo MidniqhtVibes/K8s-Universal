@@ -8,10 +8,17 @@
   <div class="page-heading">
     <p class="eyebrow">Verwaltung</p>
     <h1>Einstellungen</h1>
-    <p class="page-subtitle">Lege Standardwerte und reservierte Vergabebereiche für neue Cluster zentral fest.</p>
+    <p class="page-subtitle">Lege eine explizite Standard-Cluster-Konfiguration und reservierte Vergabebereiche für neue Cluster fest.</p>
   </div>
   <div class="page-actions">
-    <span class="badge neutral">Globale Standards</span>
+    {% if default_configuration_exists %}
+    <span class="badge ready">Benutzerdefinierte Standards</span>
+    <form method="post" action="/settings/reset" onsubmit="return confirm('Gespeicherte Standard-Konfiguration wirklich zurücksetzen? System Defaults bleiben verfügbar.')">
+      <button class="button secondary small" type="submit">Zurücksetzen</button>
+    </form>
+    {% else %}
+    <span class="badge neutral">System Defaults</span>
+    {% endif %}
   </div>
 </header>
 
@@ -19,6 +26,20 @@
 <div class="alert alert-success" role="status">
   <span class="alert-icon">{{ ui.icon('check') }}</span>
   <div><strong>Einstellungen gespeichert</strong><p>Die neuen Standardwerte werden für zukünftige Cluster verwendet.</p></div>
+</div>
+{% endif %}
+
+{% if request.query_params.get('reset') %}
+<div class="alert alert-info" role="status">
+  <span class="alert-icon">{{ ui.icon('info') }}</span>
+  <div><strong>Standard-Konfiguration zurückgesetzt</strong><p>Neue Cluster verwenden wieder die sichtbaren, nicht gespeicherten Systemwerte.</p></div>
+</div>
+{% endif %}
+
+{% if not default_configuration_exists %}
+<div class="alert alert-info" role="status">
+  <span class="alert-icon">{{ ui.icon('info') }}</span>
+  <div><strong>Noch keine eigene Standard-Konfiguration</strong><p>Das Formular zeigt technische System Defaults als Ausgangspunkt. Erst das Speichern legt eine benutzerdefinierte Standard-Konfiguration an.</p></div>
 </div>
 {% endif %}
 
@@ -52,6 +73,25 @@
         <span class="switch-control" aria-hidden="true"></span>
         <span class="switch-copy"><strong>Clustername in Proxmox-VM-Namen aufnehmen</strong><small>Erleichtert die eindeutige Zuordnung in gemeinsam genutzten Proxmox-Umgebungen.</small></span>
       </label>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <div class="section-heading">
+        <span class="section-icon">{{ ui.icon('server') }}</span>
+        <div>
+          <h2>Infrastruktur-Standards</h2>
+          <p class="page-subtitle">Wiederverwendbare Startwerte ohne Credentials, Tokens oder clusterspezifische IDs.</p>
+        </div>
+      </div>
+    </div>
+    <div class="form-grid">
+      <label>Proxmox-Node<input name="proxmox_node" value="{{ preferences.proxmox_node }}" required></label>
+      <label>Storage<input name="datastore" value="{{ preferences.datastore }}" required></label>
+      <label>Netzwerk-Bridge<input name="bridge" value="{{ preferences.bridge }}" required></label>
+      <label>VLAN-ID <span class="label-optional">optional</span><input type="number" name="vlan_id" min="1" max="4094" value="{{ preferences.vlan_id }}"></label>
+      <label>SSH-Benutzer<input name="ssh_user" value="{{ preferences.ssh_user }}" required></label>
     </div>
   </section>
 
@@ -131,9 +171,36 @@
           <label>IDs von<input type="number" name="{{ role }}_vm_id_start" value="{{ preferences[role + '_vm_id_start'] }}" required></label>
           <label>IDs bis<input type="number" name="{{ role }}_vm_id_end" value="{{ preferences[role + '_vm_id_end'] }}" required></label>
           <label>Standardanzahl<input type="number" name="{{ role }}_count" value="{{ preferences[role + '_count'] }}" required></label>
+          <label>CPU-Kerne<input type="number" name="{{ role }}_cores" min="1" max="256" value="{{ preferences[role + '_cores'] }}" required></label>
+          <label>RAM in MB<input type="number" name="{{ role }}_memory" min="512" value="{{ preferences[role + '_memory'] }}" required></label>
+          <label>Disk in GB<input type="number" name="{{ role }}_disk" min="8" value="{{ preferences[role + '_disk'] }}" required></label>
         </div>
       </article>
       {% endfor %}
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <div class="section-heading">
+        <span class="section-icon">{{ ui.icon('cluster') }}</span>
+        <div>
+          <h2>Kubernetes- und Add-on-Standards</h2>
+          <p class="page-subtitle">Technisch unterstützte Versionen und editierbare Traefik-Ausgangswerte.</p>
+        </div>
+      </div>
+    </div>
+    <div class="form-grid">
+      <label>Kubernetes-Version<select name="kubernetes_version"><option value="v1.36" selected>v1.36</option></select></label>
+      <label>Calico-Version<input name="calico_version" value="{{ preferences.calico_version }}" required></label>
+      <label>Traefik-Replikate<input type="number" name="traefik_replicas" min="1" value="{{ preferences.traefik_replicas }}" required></label>
+      <label>HTTP-NodePort<input type="number" name="http_node_port" min="30000" max="32767" value="{{ preferences.http_node_port }}" required></label>
+      <label>HTTPS-NodePort<input type="number" name="https_node_port" min="30000" max="32767" value="{{ preferences.https_node_port }}" required></label>
+      <label class="switch-field wide">
+        <input type="checkbox" name="ingress_enabled" {% if preferences.ingress_enabled %}checked{% endif %}>
+        <span class="switch-control" aria-hidden="true"></span>
+        <span class="switch-copy"><strong>Traefik standardmäßig installieren</strong><small>Kann im Cluster-Wizard weiterhin geändert werden.</small></span>
+      </label>
     </div>
   </section>
 
@@ -159,7 +226,7 @@
       <span><strong>Gilt für neue Konfigurationen</strong><small>Bestehende Cluster werden durch diese Änderungen nicht angepasst.</small></span>
     </div>
     <div class="page-actions">
-      <button type="submit">{{ ui.icon('save') }} Einstellungen speichern</button>
+      <button type="submit">{{ ui.icon('save') }} {% if default_configuration_exists %}Standard-Konfiguration aktualisieren{% else %}Standard-Konfiguration erstellen{% endif %}</button>
     </div>
   </div>
 </form>

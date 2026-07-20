@@ -16,14 +16,14 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from .config import get_settings
-from .allocations import get_preferences, suggest_allocations, used_allocations, validate_preference_config
+from .allocations import DEFAULT_PREFERENCES, effective_preferences, get_preferences, suggest_allocations, used_allocations, validate_preference_config, wizard_default_values
 from .db import Base, SessionLocal, engine, get_db
-from .manifests import APPLICATION_TEMPLATES, create_revision, render_application_template, validate_manifest_content, validate_manifest_path
-from .models import AuditEvent, ApplicationBundle, Cluster, ClusterStatus, Credential, CredentialKind, Job, JobKind, JobStatus, ManifestFile, ManifestRevision, User, utcnow
+from .manifests import APPLICATION_TEMPLATES, cleanup_manifest_revisions, create_revision, render_application_template, validate_manifest_content, validate_manifest_path
+from .models import AuditEvent, ApplicationBundle, Cluster, ClusterStatus, Credential, CredentialKind, Job, JobKind, JobStatus, ManifestFile, ManifestRevision, Preference, User, utcnow
 from .kubectl_terminal import audit_safe_command, parse_kubectl_command
 from .proxmox import ProxmoxClient, ProxmoxError, split_token
 from .security import validate_ssh_keypair, verify_password
-from .services import bind_proxmox_credential, bootstrap_database, build_cluster_from_form, credential_payload, queue_job, save_cluster, store_credential
+from .services import bind_proxmox_credential, bootstrap_database, build_cluster_from_form, cleanup_cluster_job_history, credential_payload, queue_job, save_cluster, store_credential, validate_current_template_disk
 from .terraform_state import managed_vm_ids
 
 
@@ -110,7 +110,10 @@ def logout(request: Request):
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
     clusters = db.scalars(select(Cluster).order_by(Cluster.created_at.desc())).all()
-    return templates.TemplateResponse(request, "dashboard.html", {"clusters": clusters})
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "clusters": clusters,
+        "default_configuration_exists": get_preferences(db) is not None,
+    })
 
 
 @app.get("/credentials", response_class=HTMLResponse)
@@ -205,14 +208,8 @@ def discover_proxmox(credential_id: str, _: User = Depends(current_user), db: Se
 
 @app.get("/clusters/new", response_class=HTMLResponse)
 def new_cluster(request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
-    preference = get_preferences(db).config
-    values = {
-        "network_cidr": preference["network_cidr"], "gateway": preference["gateway"],
-        "dns_servers": preference["dns_servers"], "pod_cidr": preference["pod_cidr"],
-        "service_cidr": preference["service_cidr"], "lb_count": str(preference["lb_count"]),
-        "cp_count": str(preference["cp_count"]), "worker_count": str(preference["worker_count"]),
-        "vm_name_include_cluster": "on" if preference["vm_name_include_cluster"] else "",
-    }
+    preference = effective_preferences(db)
+    values = wizard_default_values(preference)
     if preference.get("auto_suggest", True):
         try:
             values.update({key: str(value) for key, value in suggest_allocations(db).items()})
@@ -228,6 +225,7 @@ def render_wizard(request: Request, db: Session, error: str | None = None, value
         "credentials": credentials, "error": error, "values": values or {},
         "used_ips": sorted(map(str, used_ips)), "used_vm_ids": sorted(used_ids),
         "action": request.url.path if request.url.path.endswith("/edit") else "/clusters",
+        "default_configuration_exists": get_preferences(db) is not None,
     }, status_code=status_code)
 
 
@@ -238,6 +236,7 @@ async def create_cluster(request: Request, _: User = Depends(current_user), db: 
     try:
         values = bind_proxmox_credential(db, values)
         config = build_cluster_from_form(values)
+        validate_current_template_disk(db, config)
         ssh_id = config.ssh.credential_ref.removeprefix("credential://")
         ssh_credential = db.get(Credential, ssh_id)
         if not ssh_credential or ssh_credential.kind != CredentialKind.SSH:
@@ -245,7 +244,7 @@ async def create_cluster(request: Request, _: User = Depends(current_user), db: 
         if config.ssh.public_key != ssh_credential.public_data.get("public_key"):
             raise ValueError("Public Key passt nicht zum ausgewählten SSH-Credential")
         cluster = save_cluster(db, config, settings.data_root, settings.source_root)
-    except (ValidationError, ValueError, KeyError) as exc:
+    except (ValidationError, ValueError, KeyError, ProxmoxError) as exc:
         return render_wizard(request, db, str(exc), values, 400)
     return RedirectResponse(f"/clusters/{cluster.id}", status_code=303)
 
@@ -260,6 +259,9 @@ def cluster_form_values(cluster: Cluster) -> dict[str, str]:
         "vm_name_include_cluster": "on" if config["proxmox"].get("vm_name_include_cluster", False) else "",
         "network_cidr": config["network"]["cidr"], "gateway": config["network"]["gateway"], "dns_servers": ", ".join(config["network"]["dns_servers"]), "api_vip": config["network"]["api_vip"],
         "pod_cidr": config["kubernetes"]["pod_cidr"], "service_cidr": config["kubernetes"]["service_cidr"], "kubernetes_version": config["kubernetes"]["version"],
+        "registry_enabled": "on" if config.get("registry_enabled", False) else "",
+        "registry_endpoint": str(config.get("registry_endpoint") or ""),
+        "registry_use_http": "on" if config.get("registry_use_http", False) else "",
         "ssh_credential": config["ssh"]["credential_ref"], "ssh_user": config["ssh"]["user"], "ssh_public_key": config["ssh"]["public_key"],
         "calico_version": config["addons"]["cni"]["version"], "ingress_enabled": "on" if config["addons"]["ingress"]["enabled"] else "", "traefik_replicas": str(config["addons"]["ingress"]["replicas"]),
         "http_node_port": str(config["addons"]["ingress"]["http_node_port"]), "https_node_port": str(config["addons"]["ingress"]["https_node_port"]),
@@ -298,7 +300,8 @@ def allocation_suggestion(
 def preferences_page(request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
     used_ips, used_ids = used_allocations(db)
     return templates.TemplateResponse(request, "settings.html", {
-        "preferences": get_preferences(db).config,
+        "preferences": effective_preferences(db),
+        "default_configuration_exists": get_preferences(db) is not None,
         "used_ips": sorted(map(str, used_ips)), "used_vm_ids": sorted(used_ids),
     })
 
@@ -309,27 +312,51 @@ async def update_preferences(request: Request, _: User = Depends(current_user), 
     integer_fields = {
         "lb_vm_id_start", "lb_vm_id_end", "cp_vm_id_start", "cp_vm_id_end",
         "worker_vm_id_start", "worker_vm_id_end", "lb_count", "cp_count", "worker_count",
+        "lb_cores", "lb_memory", "lb_disk", "cp_cores", "cp_memory", "cp_disk",
+        "worker_cores", "worker_memory", "worker_disk", "traefik_replicas",
+        "http_node_port", "https_node_port",
     }
     try:
-        config = {key: (int(value) if key in integer_fields else str(value).strip()) for key, value in form.items()}
+        config = {
+            key: (int(value) if key in integer_fields else str(value).strip())
+            for key, value in form.items()
+            if key in DEFAULT_PREFERENCES
+        }
         config["auto_suggest"] = "auto_suggest" in form
         config["vm_name_include_cluster"] = "vm_name_include_cluster" in form
+        config["ingress_enabled"] = "ingress_enabled" in form
         validated = validate_preference_config(config)
     except (ValueError, TypeError) as exc:
         used_ips, used_ids = used_allocations(db)
         return templates.TemplateResponse(request, "settings.html", {
             "preferences": {
-                **get_preferences(db).config, **{key: str(value) for key, value in form.items()},
+                **effective_preferences(db),
+                **{key: str(value) for key, value in form.items() if key in DEFAULT_PREFERENCES},
                 "auto_suggest": "auto_suggest" in form,
                 "vm_name_include_cluster": "vm_name_include_cluster" in form,
+                "ingress_enabled": "ingress_enabled" in form,
             }, "error": str(exc),
+            "default_configuration_exists": get_preferences(db) is not None,
             "used_ips": sorted(map(str, used_ips)), "used_vm_ids": sorted(used_ids),
         }, status_code=400)
     preference = get_preferences(db)
+    if preference is None:
+        preference = Preference(id=1, config={})
     preference.config = validated
+    db.add(preference)
     db.add(AuditEvent(action="update_preferences", object_type="preference", object_id="1"))
     db.commit()
     return RedirectResponse("/settings?saved=1", status_code=303)
+
+
+@app.post("/settings/reset")
+def reset_preferences(_: User = Depends(current_user), db: Session = Depends(get_db)):
+    preference = get_preferences(db)
+    if preference is not None:
+        db.delete(preference)
+        db.add(AuditEvent(action="reset_preferences", object_type="preference", object_id="1"))
+        db.commit()
+    return RedirectResponse("/settings?reset=1", status_code=303)
 
 
 @app.get("/clusters/{cluster_id}/edit", response_class=HTMLResponse)
@@ -353,11 +380,12 @@ async def update_cluster(cluster_id: str, request: Request, _: User = Depends(cu
     try:
         values = bind_proxmox_credential(db, values)
         config = build_cluster_from_form(values, cluster_id)
+        validate_current_template_disk(db, config)
         ssh_credential = db.get(Credential, config.ssh.credential_ref.removeprefix("credential://"))
         if not ssh_credential or ssh_credential.kind != CredentialKind.SSH or config.ssh.public_key != ssh_credential.public_data.get("public_key"):
             raise ValueError("SSH-Credential und Public Key passen nicht zusammen")
         save_cluster(db, config, settings.data_root, settings.source_root)
-    except (ValidationError, ValueError, KeyError) as exc:
+    except (ValidationError, ValueError, KeyError, ProxmoxError) as exc:
         return render_wizard(request, db, str(exc), values, 400)
     return RedirectResponse(f"/clusters/{cluster_id}", status_code=303)
 
@@ -372,11 +400,16 @@ def cluster_detail(cluster_id: str, request: Request, _: User = Depends(current_
     runtime_current = cluster_runtime_is_current(cluster)
     kubeconfig_available = runtime_current and (workspace / "kubeconfig").is_file()
     terraform_state_available = runtime_current and (workspace / "terraform" / "terraform.tfstate").is_file()
+    cleanup_result = request.session.pop("job_cleanup_result", None)
+    if not isinstance(cleanup_result, dict) or cleanup_result.pop("cluster_id", None) != cluster.id:
+        cleanup_result = None
     return templates.TemplateResponse(request, "cluster.html", {
         "cluster": cluster,
         "jobs": jobs,
         "kubeconfig_available": kubeconfig_available,
         "terraform_state_available": terraform_state_available,
+        "job_cleanup_result": cleanup_result,
+        "job_retention_keep": settings.job_retention_keep,
     })
 
 
@@ -450,7 +483,20 @@ def application_editor(cluster_id: str, bundle_id: str, request: Request, _: Use
     cluster_jobs = db.scalars(select(Job).where(Job.cluster_id == cluster_id).order_by(Job.created_at.desc()).limit(50)).all()
     jobs = [job for job in cluster_jobs if job.payload.get("bundle_id") == bundle.id][:10]
     kubeconfig_available = cluster_runtime_is_current(cluster) and (settings.data_root / "clusters" / cluster.id / "kubeconfig").is_file()
-    return templates.TemplateResponse(request, "application_editor.html", {"cluster": cluster, "bundle": bundle, "files": files, "selected": selected, "revisions": revisions, "jobs": jobs, "kubeconfig_available": kubeconfig_available})
+    cleanup_result = request.session.pop("revision_cleanup_result", None)
+    if not isinstance(cleanup_result, dict) or cleanup_result.pop("bundle_id", None) != bundle.id:
+        cleanup_result = None
+    return templates.TemplateResponse(request, "application_editor.html", {
+        "cluster": cluster,
+        "bundle": bundle,
+        "files": files,
+        "selected": selected,
+        "revisions": revisions,
+        "jobs": jobs,
+        "kubeconfig_available": kubeconfig_available,
+        "revision_cleanup_result": cleanup_result,
+        "manifest_revision_retention_keep": settings.manifest_revision_retention_keep,
+    })
 
 
 @app.post("/clusters/{cluster_id}/applications/{bundle_id}/delete")
@@ -586,25 +632,14 @@ def start_manifest_job(
 
 
 @app.post("/clusters/{cluster_id}/applications/{bundle_id}/revisions/prune")
-def prune_manifest_revisions(cluster_id: str, bundle_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)):
+def prune_manifest_revisions(cluster_id: str, bundle_id: str, request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
     bundle = db.get(ApplicationBundle, bundle_id)
     if not bundle or bundle.cluster_id != cluster_id:
         raise HTTPException(404)
-    revisions = db.scalars(select(ManifestRevision).where(ManifestRevision.bundle_id == bundle.id).order_by(ManifestRevision.version.desc())).all()
-    keep_ids = {revision.id for revision in revisions[: settings.manifest_revision_retention_keep]}
-    referenced_ids = {
-        str(job.payload.get("revision_id"))
-        for job in db.scalars(select(Job).where(Job.cluster_id == cluster_id)).all()
-        if job.payload.get("revision_id")
-    }
-    removed = 0
-    for revision in revisions:
-        if revision.id in keep_ids or revision.id in referenced_ids:
-            continue
-        db.delete(revision)
-        removed += 1
-    db.add(AuditEvent(action="prune_manifest_revisions", object_type="application", object_id=bundle.id, details={"removed": removed, "keep": settings.manifest_revision_retention_keep}))
+    result = cleanup_manifest_revisions(db, bundle, settings.manifest_revision_retention_keep)
+    db.add(AuditEvent(action="prune_manifest_revisions", object_type="application", object_id=bundle.id, details=result))
     db.commit()
+    request.session["revision_cleanup_result"] = {"bundle_id": bundle.id, **result}
     return RedirectResponse(f"/clusters/{cluster_id}/applications/{bundle.id}", status_code=303)
 
 
@@ -732,21 +767,14 @@ def job_status(job_id: str, _: User = Depends(current_user), db: Session = Depen
 
 
 @app.post("/clusters/{cluster_id}/prune-jobs")
-def prune_cluster_jobs(cluster_id: str, _: User = Depends(current_user), db: Session = Depends(get_db)):
+def prune_cluster_jobs(cluster_id: str, request: Request, _: User = Depends(current_user), db: Session = Depends(get_db)):
     cluster = db.get(Cluster, cluster_id)
     if not cluster:
         raise HTTPException(404)
-    jobs = db.scalars(select(Job).where(Job.cluster_id == cluster_id).order_by(Job.created_at.desc())).all()
-    finished = [job for job in jobs if job.status not in (JobStatus.QUEUED, JobStatus.RUNNING)]
-    keep_ids = {job.id for job in finished[: settings.job_retention_keep]}
-    removed = 0
-    for job in finished:
-        if job.id in keep_ids:
-            continue
-        db.delete(job)
-        removed += 1
-    db.add(AuditEvent(action="prune_cluster_jobs", object_type="cluster", object_id=cluster_id, details={"removed": removed, "keep": settings.job_retention_keep}))
+    result = cleanup_cluster_job_history(db, cluster_id, settings.job_retention_keep)
+    db.add(AuditEvent(action="prune_cluster_jobs", object_type="cluster", object_id=cluster_id, details=result))
     db.commit()
+    request.session["job_cleanup_result"] = {"cluster_id": cluster.id, **result}
     return RedirectResponse(f"/clusters/{cluster_id}", status_code=303)
 
 

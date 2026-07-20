@@ -17,6 +17,20 @@
   </div>
 </header>
 
+{% if not default_configuration_exists %}
+<div class="alert alert-info" role="status">
+  <span class="alert-icon">{{ ui.icon('info') }}</span>
+  <div>
+    <strong>Es wurde noch keine Standard-Cluster-Konfiguration eingerichtet.</strong>
+    <p>Neue Cluster können weiterhin mit den sichtbaren Systemwerten manuell konfiguriert werden.</p>
+    <div class="page-actions">
+      <a class="button secondary small" href="/settings">Standard-Konfiguration einrichten</a>
+      <a class="button secondary small" href="/clusters/new">Ohne gespeicherte Standardwerte fortfahren</a>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if clusters %}
 <section class="grid cards cluster-grid" aria-label="Konfigurierte Cluster">
   {% for cluster in clusters %}

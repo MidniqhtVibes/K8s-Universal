@@ -1,0 +1,5 @@
+---
+container_registry_enabled: false
+container_registry_endpoint: ""
+container_registry_use_http: false
+containerd_registry_config_path: /etc/containerd/certs.d

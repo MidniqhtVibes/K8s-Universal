@@ -85,6 +85,42 @@ Danach mit Benutzer `admin` und `INITIAL_ADMIN_PASSWORD` anmelden. Das initiale 
 
 Nach einer Änderung der Clusterkonfiguration gelten vorhandene Kubeconfig und Laufzeitstatus nicht mehr als aktuell. Der Builder verlangt dann einen neuen Terraform-Plan und wendet exakt dieses geprüfte Planartefakt an. SSH-Port `22`, Kubernetes-API-Port `6443` und Kubernetes `v1.36` sind die derzeit vollständig unterstützten Werte.
 
+Die Discovery zeigt für das ausgewählte QEMU-Template auch dessen Disk-Größe.
+Load-Balancer-, Control-Plane- und Worker-Disks dürfen nicht kleiner sein. Der
+Builder prüft diese Regel beim Speichern sowie erneut vor Terraform-Plan und
+-Apply gegen die aktuellen Proxmox-Daten. Fehlt die Größenangabe, wird der
+Vorgang mit einer verständlichen Fehlermeldung gestoppt.
+
+### Optionale Container-Registry
+
+Im Wizard kann unter **Container Registry** genau ein privater Registry-Endpunkt
+für den Cluster aktiviert werden. Der Endpoint wird ohne Protokoll und Pfad im
+Format `host:port` eingegeben, zum Beispiel:
+
+```text
+10.200.50.240:5000
+```
+
+Standardmäßig verwendet containerd HTTPS. Die separate HTTP-Option darf nur für
+eine vertrauenswürdige interne Lab- oder Testumgebung aktiviert werden; für
+produktive Registries ist HTTPS vorgesehen. Der Builder konfiguriert
+ausschließlich den angegebenen Endpoint auf Control Planes und Workern und
+schaltet die TLS-Prüfung nicht global ab. Während der Ansible-Provisionierung
+wird außerdem `http(s)://<endpoint>/v2/` von jedem Kubernetes-Node geprüft.
+
+Nach erfolgreicher Provisionierung kann ein Workload das Image direkt
+referenzieren:
+
+```yaml
+containers:
+  - name: azubiorga
+    image: 10.200.50.240:5000/azubiorga:1.0.0
+```
+
+Eine manuelle `hosts.toml`-Konfiguration per SSH auf einzelnen Nodes ist für neu
+erstellte Cluster damit nicht erforderlich. Ist die Option deaktiviert, bleibt
+der bisherige Provisionierungsablauf unverändert.
+
 Destroy ist zweistufig. Zuerst wird nach Eingabe des Clusternamens ein Destroy-Plan erzeugt. Erst dieser unveränderte Plan kann danach angewendet werden.
 
 Nach einem erfolgreichen Destroy erhält der Cluster den Status `destroyed`. Erst dann erscheint die zusätzliche Aktion **Cluster endgültig entfernen**. Sie löscht den Builder-Eintrag sowie dessen lokalen Terraform-State, Kubeconfig, generierte Dateien und Jobdaten. Credentials bleiben erhalten.
@@ -97,6 +133,13 @@ erhalten daraus automatisch den ersten zusammenhängenden freien Bereich. Aktive
 Cluster, manuell reservierte IPs/CIDRs und bei ausgewähltem Proxmox-Credential
 bereits vorhandene VM-IDs werden übersprungen. Doppelte Vergaben zwischen vom
 Builder verwalteten Clustern werden zusätzlich beim Speichern abgewiesen.
+
+Beim ersten Start sind diese Werte nur sichtbare technische **System Defaults**;
+ein Lesezugriff legt keinen Datenbankeintrag an. Erst **Standard-Konfiguration
+erstellen** speichert benutzerdefinierte Startwerte für neue Wizard-Aufrufe.
+Die Konfiguration bleibt optional, kann zurückgesetzt werden und enthält keine
+Tokens oder privaten Schlüssel. Bestehende Cluster werden durch Änderungen an
+den Standards nicht verändert.
 
 Vor dem Terraform-Plan und erneut unmittelbar vor dessen Anwendung prüft der
 Worker die Zielumgebung direkt über die Proxmox-API. Fremde Ressourcen mit
@@ -128,6 +171,13 @@ Der vorgesehene Ablauf lautet:
 5. Optional mit **Aus Cluster entfernen** die deklarierten Ressourcen wieder löschen und danach den Builder-Eintrag entfernen.
 
 Jedes Speichern und jeder Lauf erzeugt eine unveränderliche Revision. Frühere Revisionen können als neuer Entwurf wiederhergestellt werden. Unverschlüsselte Ressourcen vom Typ `Secret` sind gesperrt; dafür ist später eine Integration mit SOPS oder Sealed Secrets vorgesehen.
+
+**Alte Revisionen aufräumen** behält die konfigurierte Anzahl neuester
+Revisionen sowie jede ältere Revision, die noch in einer Job-Historie verwendet
+wird. Die Rückmeldung unterscheidet gelöschte, per Retention behaltene und per
+Jobreferenz geschützte Revisionen. Entsprechend entfernt **Alte Historie
+aufräumen** auf der Clusterseite nur abgeschlossene Jobs außerhalb des
+konfigurierten Limits; laufende und wartende Jobs bleiben immer erhalten.
 
 ## Proxmox-Berechtigungen
 

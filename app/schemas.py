@@ -1,8 +1,36 @@
+import re
 from ipaddress import IPv4Address, IPv4Network
 from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+REGISTRY_ENDPOINT_ERROR = (
+    "Bitte eine Registry-Adresse im Format host:port angeben, "
+    "zum Beispiel 10.200.50.240:5000."
+)
+_HOSTNAME_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def _is_valid_registry_endpoint(value: str) -> bool:
+    """Accept an IPv4 address or DNS hostname followed by a TCP port."""
+    if value.count(":") != 1:
+        return False
+    host, port = value.rsplit(":", 1)
+    if not host or not port.isascii() or not port.isdigit():
+        return False
+    if not 1 <= int(port) <= 65535:
+        return False
+    try:
+        IPv4Address(host)
+        return True
+    except ValueError:
+        # A dotted numeric value that is not valid IPv4 must not be accepted as
+        # a DNS name (for example 999.999.999.999).
+        if re.fullmatch(r"[0-9.]+", host):
+            return False
+    return len(host) <= 253 and all(_HOSTNAME_LABEL.fullmatch(label) for label in host.split("."))
 
 
 class ProxmoxConfig(BaseModel):
@@ -114,11 +142,29 @@ class ClusterConfig(BaseModel):
     network: NetworkConfig
     ssh: SSHConfig
     kubernetes: KubernetesConfig
+    registry_enabled: bool = False
+    registry_endpoint: str | None = None
+    registry_use_http: bool = False
     nodes: list[NodeConfig]
     addons: AddonsConfig = Field(default_factory=AddonsConfig)
 
+    @field_validator("registry_endpoint", mode="before")
+    @classmethod
+    def normalize_registry_endpoint(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
     @model_validator(mode="after")
     def validate_cluster(self) -> "ClusterConfig":
+        if not self.registry_enabled:
+            # Disabled settings must be semantically identical to legacy
+            # configurations, even if a browser submits stale field values.
+            self.registry_endpoint = None
+            self.registry_use_http = False
+        elif self.registry_endpoint is None or not _is_valid_registry_endpoint(self.registry_endpoint):
+            raise ValueError(REGISTRY_ENDPOINT_ERROR)
         names = [node.name for node in self.nodes]
         ips = [node.ip for node in self.nodes]
         vm_ids = [node.vm_id for node in self.nodes]

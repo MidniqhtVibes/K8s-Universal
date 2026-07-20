@@ -1,0 +1,78 @@
+---
+- name: "[Registry] Validate registry variables"
+  ansible.builtin.assert:
+    that:
+      - container_registry_endpoint is match('^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?):[0-9]{1,5}$')
+      - (container_registry_endpoint.rsplit(':', 1)[-1] | int) >= 1
+      - (container_registry_endpoint.rsplit(':', 1)[-1] | int) <= 65535
+    fail_msg: >-
+      Bitte eine Registry-Adresse im Format host:port angeben, zum Beispiel
+      10.200.50.240:5000.
+
+- name: "[Registry] Read existing containerd configuration"
+  ansible.builtin.slurp:
+    path: /etc/containerd/config.toml
+  register: containerd_config
+
+- name: "[Registry] Verify containerd supports per-registry host configuration"
+  ansible.builtin.assert:
+    that:
+      - (containerd_config.content | b64decode | regex_search('(?m)^\\s*config_path\\s*=')) is not none
+    fail_msg: >-
+      Die vorhandene containerd-Konfiguration enthält keinen unterstützten
+      Registry-Konfigurationspfad und wurde nicht verändert.
+
+- name: "[Registry] Configure containerd registry host directory"
+  ansible.builtin.lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: '^\s*config_path\s*='
+    line: '      config_path = "{{ containerd_registry_config_path }}"'
+  notify: Restart containerd
+
+- name: "[Registry] Create containerd registry configuration root"
+  ansible.builtin.file:
+    path: "{{ containerd_registry_config_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "[Registry] Create endpoint configuration directory"
+  ansible.builtin.file:
+    path: "{{ containerd_registry_config_path }}/{{ container_registry_endpoint }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "[Registry] Configure registry endpoint for containerd"
+  ansible.builtin.template:
+    src: hosts.toml.j2
+    dest: "{{ containerd_registry_config_path }}/{{ container_registry_endpoint }}/hosts.toml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart containerd
+
+- name: "[Registry] Check configured registry endpoint"
+  block:
+    - name: "[Registry] Request registry API from Kubernetes node"
+      ansible.builtin.uri:
+        url: "{{ 'http' if container_registry_use_http | bool else 'https' }}://{{ container_registry_endpoint }}/v2/"
+        method: GET
+        status_code:
+          - 200
+          - 401
+        validate_certs: "{{ not (container_registry_use_http | bool) }}"
+        return_content: false
+        timeout: 10
+      register: container_registry_reachability
+      until: container_registry_reachability.status | default(0) in [200, 401]
+      retries: 3
+      delay: 5
+  rescue:
+    - name: "[Registry] Report unreachable registry"
+      ansible.builtin.fail:
+        msg: >-
+          Die konfigurierte Container-Registry {{ container_registry_endpoint }}
+          ist vom Kubernetes-Node {{ inventory_hostname }} nicht erreichbar.

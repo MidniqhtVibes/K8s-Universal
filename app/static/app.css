@@ -964,6 +964,12 @@ button.small {
   color: #f1d16f;
 }
 
+.badge.warning {
+  border-color: #6e5b22;
+  background: #393015;
+  color: #f1d16f;
+}
+
 .badge.failed {
   border-color: #7f3545;
   background: #411c27;
@@ -1174,6 +1180,12 @@ button.small {
   margin-bottom: 18px;
 }
 
+.cluster-sidebar-stack {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+}
+
 .table-shell {
   width: 100%;
   overflow-x: auto;
@@ -1230,15 +1242,83 @@ tbody tr:hover {
   background: rgb(21 41 66 / 35%);
 }
 
-.lifecycle-card {
+.lifecycle-card,
+.registry-card {
   padding: 0;
   overflow: hidden;
 }
 
-.lifecycle-card > .card-header {
+.lifecycle-card > .card-header,
+.registry-card > .card-header {
   margin: 0;
   border-bottom: 1px solid var(--line);
   padding: 18px 20px;
+}
+
+.registry-details {
+  margin: 0;
+  padding: 5px 20px 17px;
+}
+
+.registry-details > div {
+  display: flex;
+  min-height: 43px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.registry-details > div:last-child {
+  border-bottom: 0;
+}
+
+.registry-details dt {
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 750;
+}
+
+.registry-details dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: .77rem;
+  font-weight: 750;
+  text-align: right;
+}
+
+.registry-details code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.registry-security-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border-top: 1px solid #6e5b22;
+  background: rgb(57 48 21 / 72%);
+  color: #f1d16f;
+  padding: 13px 20px;
+}
+
+.registry-security-note > .icon {
+  width: 17px;
+  height: 17px;
+  margin-top: 1px;
+}
+
+.registry-security-note p {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: .7rem;
+}
+
+.registry-security-note span {
+  color: #d5c584;
+  font-size: .66rem;
 }
 
 .lifecycle-action-grid {
@@ -1500,6 +1580,41 @@ label,
   font-weight: 500;
 }
 
+.template-disk-summary {
+  display: flex;
+  min-height: 74px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgb(10 25 41 / 55%);
+  padding: 12px 14px;
+}
+
+.template-disk-summary > span {
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.template-disk-summary > strong {
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.template-disk-summary > small {
+  line-height: 1.4;
+}
+
+.field-error {
+  color: #ffabb4;
+  font-size: .68rem;
+  font-weight: 650;
+}
+
 input,
 select,
 textarea {
@@ -1536,6 +1651,11 @@ textarea:focus {
   outline: 0;
   background: #091927;
   box-shadow: 0 0 0 3px rgb(99 212 179 / 11%);
+}
+
+input[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgb(255 117 129 / 10%);
 }
 
 input:read-only {
@@ -1657,6 +1777,64 @@ input[type="radio"] {
 .wizard-section > #discovery-result {
   max-height: 360px;
   margin: 16px 0 0;
+}
+
+.form-subsection {
+  border-top: 1px solid var(--line);
+  margin-top: 22px;
+  padding-top: 20px;
+}
+
+.form-subsection-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 15px;
+}
+
+.form-subsection-heading > div > p:last-child {
+  max-width: 720px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: .76rem;
+}
+
+.registry-section {
+  display: grid;
+  gap: 13px;
+}
+
+.registry-enable-field {
+  align-self: stretch;
+}
+
+.registry-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgb(8 21 34 / 48%);
+  padding: 15px;
+}
+
+.registry-options[hidden] {
+  display: none;
+}
+
+.registry-endpoint-field code {
+  color: var(--muted-strong);
+  font-size: inherit;
+}
+
+.registry-http-field {
+  align-self: start;
+}
+
+.registry-http-warning {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .step-number {
@@ -1829,6 +2007,12 @@ input[type="radio"] {
   border-color: #31516b;
   background: #10283d;
   color: #b9d8ef;
+}
+
+.alert-warning {
+  border-color: #6e5b22;
+  background: #393015;
+  color: #f1d16f;
 }
 
 .alert > div > p,
@@ -2797,6 +2981,7 @@ hr {
   }
 
   .lifecycle-card,
+  .registry-card,
   .jobs-card,
   .terminal-card,
   .manifest-editor,
@@ -2825,7 +3010,8 @@ hr {
 
   .allocation-summary-grid,
   .switch-list,
-  .pool-config-grid {
+  .pool-config-grid,
+  .registry-options {
     grid-template-columns: 1fr;
   }
 

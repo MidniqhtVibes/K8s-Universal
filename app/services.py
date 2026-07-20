@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from .generator import config_hash, render_cluster
 from .allocations import validate_cluster_allocations
 from .models import AuditEvent, Cluster, ClusterStatus, Credential, CredentialKind, Job, JobKind, JobStatus, User
+from .proxmox import ProxmoxClient
 from .schemas import ClusterConfig
 from .security import decrypt_payload, encrypt_payload, hash_password
 
@@ -86,6 +87,66 @@ def bind_proxmox_credential(db: Session, form: dict[str, str]) -> dict[str, str]
     return trusted
 
 
+def validate_template_disk_size(config: ClusterConfig, discovery: dict) -> int:
+    """Validate every requested VM disk against the selected live template."""
+    template = None
+    resources = discovery.get("vms", []) if isinstance(discovery, dict) else []
+    for item in resources if isinstance(resources, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            vm_id = int(item.get("vmid"))
+        except (TypeError, ValueError):
+            continue
+        if (
+            item.get("template") in (1, True, "1")
+            and item.get("type") == "qemu"
+            and item.get("node") == config.proxmox.node
+            and vm_id == config.proxmox.template_vm_id
+        ):
+            template = item
+            break
+    if template is None:
+        raise ValueError(
+            f"QEMU-Template {config.proxmox.template_vm_id} wurde auf Node "
+            f"{config.proxmox.node} nicht gefunden."
+        )
+    template_disk_gb = template.get("template_disk_gb")
+    if isinstance(template_disk_gb, bool) or not isinstance(template_disk_gb, int) or template_disk_gb < 1:
+        raise ValueError(
+            f"Die Disk-Größe des Proxmox-Templates {config.proxmox.template_vm_id} "
+            "konnte nicht ermittelt werden. Der Vorgang wurde aus Sicherheitsgründen gestoppt."
+        )
+    role_labels = {
+        "loadbalancer": "Load-Balancer",
+        "control_plane": "Control-Plane",
+        "worker": "Worker",
+    }
+    errors = []
+    for role, label in role_labels.items():
+        role_disks = [node.disk_gb for node in config.nodes if node.role == role]
+        configured_disk = min(role_disks) if role_disks else template_disk_gb
+        if configured_disk < template_disk_gb:
+            errors.append(
+                f"Die konfigurierte {label}-Disk mit {configured_disk} GB ist kleiner als "
+                f"die Disk des ausgewählten Proxmox-Templates mit {template_disk_gb} GB."
+            )
+    if errors:
+        raise ValueError(" ".join(errors))
+    return template_disk_gb
+
+
+def validate_current_template_disk(db: Session, config: ClusterConfig) -> int:
+    """Fetch trusted Proxmox metadata and validate before persisting IaC input."""
+    payload = credential_payload(db, config.proxmox.credential_ref, CredentialKind.PROXMOX)
+    discovery = ProxmoxClient(
+        config.proxmox.endpoint,
+        payload["api_token"],
+        config.proxmox.verify_tls,
+    ).discover()
+    return validate_template_disk_size(config, discovery)
+
+
 def build_cluster_from_form(form: dict[str, str], cluster_id: str | None = None) -> ClusterConfig:
     cluster_id = cluster_id or str(uuid.uuid4())
     network = ipaddress.ip_network(form["network_cidr"], strict=True)
@@ -141,6 +202,9 @@ def build_cluster_from_form(form: dict[str, str], cluster_id: str | None = None)
             "pod_cidr": form["pod_cidr"],
             "service_cidr": form["service_cidr"],
         },
+        "registry_enabled": form.get("registry_enabled") == "on",
+        "registry_endpoint": form.get("registry_endpoint"),
+        "registry_use_http": form.get("registry_use_http") == "on",
         "nodes": nodes,
         "addons": {
             "cni": {"provider": "calico", "version": form["calico_version"].strip()},
@@ -190,6 +254,31 @@ def save_cluster(db: Session, config: ClusterConfig, data_root: Path, source_roo
         # An old kubeconfig must never look valid for newly edited addresses.
         (data_root / "clusters" / config.id / "kubeconfig").unlink(missing_ok=True)
     return cluster
+
+
+def cleanup_cluster_job_history(db: Session, cluster_id: str, retention_keep: int) -> dict[str, int]:
+    """Delete only completed jobs beyond the configured retention window."""
+    terminal_statuses = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED)
+    finished = db.scalars(
+        select(Job)
+        .where(Job.cluster_id == cluster_id, Job.status.in_(terminal_statuses))
+        .order_by(Job.created_at.desc(), Job.id.desc())
+    ).all()
+    active_ignored = len(db.scalars(
+        select(Job.id).where(
+            Job.cluster_id == cluster_id,
+            Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
+        )
+    ).all())
+    kept = finished[:retention_keep]
+    for job in finished[retention_keep:]:
+        db.delete(job)
+    return {
+        "deleted": max(0, len(finished) - len(kept)),
+        "kept": len(kept),
+        "active_ignored": active_ignored,
+        "retention_limit": retention_keep,
+    }
 
 
 def queue_job(db: Session, cluster: Cluster, kind: JobKind, payload: dict | None = None) -> Job:

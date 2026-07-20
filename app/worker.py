@@ -25,7 +25,7 @@ from .models import ApplicationBundle, Cluster, ClusterStatus, CredentialKind, J
 from .proxmox import ProxmoxClient
 from .schemas import ClusterConfig
 from .security import redact
-from .services import credential_payload
+from .services import credential_payload, validate_template_disk_size
 from .terraform_state import managed_vm_ids
 
 
@@ -282,28 +282,30 @@ def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace:
     if config.proxmox.bridge not in bridges:
         raise RuntimeError(f"Bridge {config.proxmox.bridge} ist auf {config.proxmox.node} nicht verfügbar")
     resources = discovery.get("vms", [])
-    templates = {
-        int(item["vmid"])
-        for item in resources
-        if item.get("template") in (1, True, "1")
-        and item.get("type") == "qemu"
-        and item.get("node") == config.proxmox.node
-        and item.get("vmid") is not None
-    }
-    if config.proxmox.template_vm_id not in templates:
-        raise RuntimeError(
-            f"QEMU-Template {config.proxmox.template_vm_id} wurde auf Node {config.proxmox.node} nicht gefunden"
-        )
-    used_ids = {int(item["vmid"]) for item in resources if item.get("vmid") is not None}
+    try:
+        template_disk_gb = validate_template_disk_size(config, discovery)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    append_log(
+        job.id,
+        f"Template-Disk geprüft: mindestens {template_disk_gb} GB für alle Cluster-Nodes.\n",
+    )
+    resource_entries = []
+    for item in resources if isinstance(resources, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            vm_id = int(item.get("vmid"))
+        except (TypeError, ValueError):
+            continue
+        resource_entries.append((item, vm_id))
+    used_ids = {vm_id for _, vm_id in resource_entries}
     owned_ids = managed_vm_ids(workspace / "terraform" / "terraform.tfstate")
     collisions = sorted({node.vm_id for node in config.nodes} & (used_ids - owned_ids))
     if collisions:
         raise RuntimeError(f"VM-IDs sind bereits durch fremde Ressourcen belegt: {', '.join(map(str, collisions))}")
 
-    foreign_resources = [
-        item for item in resources
-        if item.get("vmid") is not None and int(item["vmid"]) not in owned_ids
-    ]
+    foreign_resources = [entry for entry in resource_entries if entry[1] not in owned_ids]
     planned_names = {
         (
             proxmox_vm_name(config.name, node.name)
@@ -314,8 +316,8 @@ def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace:
     }
     name_conflicts = sorted(
         {
-            (str(item["name"]), int(item["vmid"]))
-            for item in foreign_resources
+            (str(item["name"]), vm_id)
+            for item, vm_id in foreign_resources
             if item.get("name") in planned_names
         }
     )
@@ -329,7 +331,7 @@ def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace:
 
     requested_addresses = {config.network.api_vip, *(node.ip for node in config.nodes)}
     ip_conflicts: set[tuple[str, int, str]] = set()
-    for resource in foreign_resources:
+    for resource, vm_id in foreign_resources:
         if resource.get("template") in (1, True, "1"):
             continue
         if resource.get("type") not in {"qemu", "lxc"}:
@@ -337,7 +339,7 @@ def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace:
         guest_addresses = configured_guest_ipv4_addresses(client.guest_config(resource))
         for address in requested_addresses & guest_addresses:
             ip_conflicts.add(
-                (str(address), int(resource["vmid"]), str(resource.get("name") or "ohne Name"))
+                (str(address), vm_id, str(resource.get("name") or "ohne Name"))
             )
     if ip_conflicts:
         conflict_details = ", ".join(
@@ -420,8 +422,16 @@ def run_ansible_stack(
     env: dict[str, str],
     secrets: list[str],
 ) -> None:
+    if config.registry_enabled:
+        append_log(job.id, f"[Registry] Private Registry aktiviert: {config.registry_endpoint}\n")
+        append_log(job.id, f"[Registry] Protokoll: {'HTTP' if config.registry_use_http else 'HTTPS'}\n")
+        append_log(job.id, "[Registry] Konfiguriere containerd auf Control Plane Nodes.\n")
+        append_log(job.id, "[Registry] Konfiguriere containerd auf Worker Nodes.\n")
+        append_log(job.id, "[Registry] Prüfe Erreichbarkeit auf allen Kubernetes-Nodes.\n")
     wait_for_ssh(job, config)
     run_command(job, ["ansible-playbook", "-i", "inventory.generated.yml", "site.yml"], ansible_dir, env, secrets)
+    if config.registry_enabled:
+        append_log(job.id, "[Registry] Registry erreichbar.\n")
     if config.addons.ingress.enabled:
         run_command(job, ["helm", "repo", "add", "traefik", "https://traefik.github.io/charts", "--force-update"], workspace, env, secrets)
         run_command(job, ["helm", "repo", "update"], workspace, env, secrets)

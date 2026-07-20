@@ -1,0 +1,8 @@
+---
+- name: Configure optional container registry
+  hosts: k8s_cluster
+  become: true
+  any_errors_fatal: true
+  roles:
+    - role: container_registry
+      when: container_registry_enabled | bool

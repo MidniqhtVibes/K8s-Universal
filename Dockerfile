@@ -98,7 +98,7 @@ COPY --from=worker-deps /opt/venv /opt/venv
 COPY --from=external-tools /usr/local/bin/terraform /usr/local/bin/terraform
 COPY --from=external-tools /usr/local/bin/kubectl /usr/local/bin/kubectl
 COPY --from=external-tools /usr/local/bin/helm /usr/local/bin/helm
-RUN ansible-playbook --syntax-check -i ansible/inventory.ini ansible/site.yml
+RUN cd ansible && ansible-playbook --syntax-check -i inventory.ini site.yml
 
 FROM worker-base AS test
 COPY requirements.txt requirements-dev.txt ./

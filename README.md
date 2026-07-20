@@ -11,6 +11,7 @@ The application is provided as prebuilt container images via the GitHub Containe
 - Provisioning via Terraform, Ansible, and kubeadm
 - HAProxy and Keepalived for the Kubernetes API VIP
 - Calico as the CNI and optionally Traefik as the ingress controller
+- Optional private container registry configuration for every Kubernetes node
 - Credential management for the Proxmox API and SSH keys
 - Kubernetes web console for `kubectl`
 - Application templates and manifest bundles
@@ -207,6 +208,30 @@ http://127.0.0.1:8000
 ```
 
 The initial login uses the username `admin` and the value from `INITIAL_ADMIN_PASSWORD`.
+
+## Optional Private Container Registry
+
+The cluster wizard can configure one private registry endpoint for containerd on
+all control-plane and worker nodes. Enter the endpoint as `host:port`, without a
+URL scheme or path, for example:
+
+```text
+10.200.50.240:5000
+```
+
+HTTPS is used by default. Enable the separate HTTP option only for a registry in
+a trusted internal lab or test network; production registries should use HTTPS.
+The setting applies only to the endpoint entered in the wizard and does not
+disable TLS verification globally.
+
+After the cluster has been provisioned, Kubernetes workloads can use images from
+that endpoint directly:
+
+```yaml
+containers:
+  - name: azubiorga
+    image: 10.200.50.240:5000/azubiorga:1.0.0
+```
 
 ## Persistent Data
 
