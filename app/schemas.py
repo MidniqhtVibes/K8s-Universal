@@ -1,4 +1,5 @@
 import re
+from enum import Enum
 from ipaddress import IPv4Address, IPv4Network
 from typing import Literal
 from urllib.parse import urlsplit
@@ -11,6 +12,19 @@ REGISTRY_ENDPOINT_ERROR = (
     "zum Beispiel 10.200.50.240:5000."
 )
 _HOSTNAME_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+class ClusterType(str, Enum):
+    KUBEADM = "kubeadm"
+    TALOS = "talos"
+
+
+class TalosVersion(str, Enum):
+    V1_13_6 = "v1.13.6"
+
+
+SUPPORTED_TALOS_VERSIONS = tuple(version.value for version in TalosVersion)
+TALOS_KUBERNETES_PATCH_VERSIONS = {"v1.36": "1.36.2"}
 
 
 def _is_valid_registry_endpoint(value: str) -> bool:
@@ -38,6 +52,9 @@ class ProxmoxConfig(BaseModel):
     node: str
     datastore: str
     template_vm_id: int = Field(ge=100, le=999999999)
+    # Legacy/kubeadm configurations keep using ``template_vm_id`` for every
+    # role. Talos needs an additional Ubuntu template for its SSH-managed LBs.
+    load_balancer_template_vm_id: int | None = Field(default=None, ge=100, le=999999999)
     bridge: str = "vmbr0"
     vlan_id: int | None = Field(default=None, ge=1, le=4094)
     verify_tls: bool = True
@@ -69,7 +86,7 @@ class NetworkConfig(BaseModel):
 
 
 class SSHConfig(BaseModel):
-    user: str = "ubuntu"
+    user: str = Field(default="ubuntu", min_length=1)
     # Proxmox cloud-init leaves the image's SSH daemon on its standard port.
     port: Literal[22] = 22
     public_key: str
@@ -81,6 +98,16 @@ class SSHConfig(BaseModel):
         if not value.startswith(("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-")):
             raise ValueError("Nicht unterstütztes SSH-Public-Key-Format")
         return value.strip()
+
+
+class TalosConfig(BaseModel):
+    version: TalosVersion = TalosVersion.V1_13_6
+    install_disk: Literal["/dev/sda", "/dev/vda"] = "/dev/sda"
+    network_interface: str = Field(default="eth0", pattern=r"^[A-Za-z0-9_.:-]{1,32}$")
+    # Static addresses are supplied to the maintenance environment through
+    # Proxmox's NoCloud config drive. Other Talos platforms need a different
+    # discovery/bootstrap design and are intentionally not accepted here.
+    template_platform: Literal["nocloud"] = "nocloud"
 
 
 class KubernetesConfig(BaseModel):
@@ -138,9 +165,12 @@ class ClusterConfig(BaseModel):
     schema_version: Literal[1] = 1
     id: str
     name: str = Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    cluster_type: ClusterType = ClusterType.KUBEADM
     proxmox: ProxmoxConfig
     network: NetworkConfig
-    ssh: SSHConfig
+    ssh: SSHConfig | None = None
+    load_balancer_ssh: SSHConfig | None = None
+    talos: TalosConfig | None = None
     kubernetes: KubernetesConfig
     registry_enabled: bool = False
     registry_endpoint: str | None = None
@@ -158,6 +188,20 @@ class ClusterConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_cluster(self) -> "ClusterConfig":
+        if self.cluster_type == ClusterType.KUBEADM:
+            if self.ssh is None:
+                raise ValueError("Kubernetes/kubeadm benötigt ein SSH-Credential")
+            if self.talos is not None:
+                raise ValueError("Talos-Konfiguration ist nur für Talos-Cluster zulässig")
+        else:
+            if self.talos is None:
+                raise ValueError("Talos-Version und Installationsdisk sind erforderlich")
+            if self.load_balancer_ssh is None:
+                raise ValueError("Die Ubuntu-Load-Balancer benötigen ein eigenes SSH-Credential")
+            if self.proxmox.load_balancer_template_vm_id is None:
+                raise ValueError("Für Talos ist ein Ubuntu-Template für die Load-Balancer erforderlich")
+            if self.proxmox.load_balancer_template_vm_id == self.proxmox.template_vm_id:
+                raise ValueError("Talos-Nodes und Ubuntu-Load-Balancer müssen unterschiedliche Templates verwenden")
         if not self.registry_enabled:
             # Disabled settings must be semantically identical to legacy
             # configurations, even if a browser submits stale field values.
@@ -185,7 +229,10 @@ class ClusterConfig(BaseModel):
             raise ValueError("Gateway und API-VIP müssen verschieden sein")
         if self.network.gateway in ips:
             raise ValueError("Gateway darf keinem Node gehören")
-        if self.proxmox.template_vm_id in vm_ids:
+        template_vm_ids = {self.proxmox.template_vm_id}
+        if self.proxmox.load_balancer_template_vm_id is not None:
+            template_vm_ids.add(self.proxmox.load_balancer_template_vm_id)
+        if template_vm_ids & set(vm_ids):
             raise ValueError("Template-VM-ID darf nicht als Node-VM-ID verwendet werden")
         networks = [self.network.cidr, self.kubernetes.pod_cidr, self.kubernetes.service_cidr]
         for index, left in enumerate(networks):
@@ -204,6 +251,21 @@ class ClusterConfig(BaseModel):
         if self.addons.ingress.http_node_port == self.addons.ingress.https_node_port:
             raise ValueError("HTTP- und HTTPS-NodePort müssen verschieden sein")
         return self
+
+    @property
+    def effective_load_balancer_template_vm_id(self) -> int:
+        return self.proxmox.load_balancer_template_vm_id or self.proxmox.template_vm_id
+
+    @property
+    def provisioning_ssh(self) -> SSHConfig:
+        credential = self.ssh if self.cluster_type == ClusterType.KUBEADM else self.load_balancer_ssh
+        if credential is None:  # guarded by model validation; helps type checkers and corrupted data
+            raise ValueError("SSH-Konfiguration für die Provisionierung fehlt")
+        return credential
+
+    @property
+    def kubernetes_patch_version(self) -> str:
+        return TALOS_KUBERNETES_PATCH_VERSIONS[self.kubernetes.version]
 
     def public_dict(self) -> dict:
         return self.model_dump(mode="json")

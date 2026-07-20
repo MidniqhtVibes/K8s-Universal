@@ -6,12 +6,14 @@ resource "proxmox_virtual_environment_vm" "k8s" {
   vm_id     = each.value.vm_id
 
   clone {
-    vm_id = var.template_vm_id
+    vm_id = each.value.role == "loadbalancer" ? coalesce(var.load_balancer_template_vm_id, var.template_vm_id) : var.template_vm_id
     full  = true
   }
 
   agent {
-    enabled = true
+    # A standard Talos image has no QEMU guest agent. Enabling the Proxmox
+    # integration without the matching system extension causes noisy errors.
+    enabled = var.cluster_type == "kubeadm" || each.value.role == "loadbalancer"
   }
 
   cpu {
@@ -25,7 +27,7 @@ resource "proxmox_virtual_environment_vm" "k8s" {
 
   disk {
     datastore_id = var.datastore_id
-    interface    = "scsi0"
+    interface    = var.cluster_type == "talos" && each.value.role != "loadbalancer" && var.talos_install_disk == "/dev/vda" ? "virtio0" : "scsi0"
     size         = each.value.disk_gb
   }
 
@@ -48,9 +50,12 @@ resource "proxmox_virtual_environment_vm" "k8s" {
       servers = var.dns_servers
     }
 
-    user_account {
-      username = var.ssh_user
-      keys     = [var.ssh_public_key]
+    dynamic "user_account" {
+      for_each = var.cluster_type == "kubeadm" || each.value.role == "loadbalancer" ? [1] : []
+      content {
+        username = var.ssh_user
+        keys     = [var.ssh_public_key]
+      }
     }
   }
 

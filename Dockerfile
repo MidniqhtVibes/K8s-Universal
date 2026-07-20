@@ -4,11 +4,13 @@ ARG PYTHON_VERSION=3.12
 ARG TERRAFORM_VERSION=1.12.2
 ARG KUBECTL_VERSION=v1.36.2
 ARG HELM_VERSION=v3.18.3
+ARG TALOSCTL_VERSION=v1.13.6
 
 FROM debian:bookworm-slim AS external-tools
 ARG TERRAFORM_VERSION
 ARG KUBECTL_VERSION
 ARG HELM_VERSION
+ARG TALOSCTL_VERSION
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl tar unzip \
@@ -25,6 +27,9 @@ RUN curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux
     && tar -xzf /tmp/helm.tar.gz -C /tmp \
     && install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm \
     && rm -rf /tmp/helm.tar.gz /tmp/linux-amd64
+
+RUN curl -fsSLo /usr/local/bin/talosctl "https://github.com/siderolabs/talos/releases/download/${TALOSCTL_VERSION}/talosctl-linux-amd64" \
+    && chmod 0755 /usr/local/bin/talosctl
 
 FROM debian:bookworm-slim AS frontend-assets
 
@@ -98,6 +103,7 @@ COPY --from=worker-deps /opt/venv /opt/venv
 COPY --from=external-tools /usr/local/bin/terraform /usr/local/bin/terraform
 COPY --from=external-tools /usr/local/bin/kubectl /usr/local/bin/kubectl
 COPY --from=external-tools /usr/local/bin/helm /usr/local/bin/helm
+COPY --from=external-tools /usr/local/bin/talosctl /usr/local/bin/talosctl
 RUN cd ansible && ansible-playbook --syntax-check -i inventory.ini site.yml
 
 FROM worker-base AS test

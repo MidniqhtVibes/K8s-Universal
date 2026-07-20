@@ -11,12 +11,37 @@ variable "proxmox_insecure" {
   default = false
 }
 
+variable "cluster_type" {
+  type    = string
+  default = "kubeadm"
+  validation {
+    condition     = contains(["kubeadm", "talos"], var.cluster_type)
+    error_message = "cluster_type muss kubeadm oder talos sein."
+  }
+}
+
 variable "proxmox_node" {
   type = string
 }
 
 variable "template_vm_id" {
   type = number
+}
+
+variable "load_balancer_template_vm_id" {
+  type        = number
+  default     = null
+  nullable    = true
+  description = "Ubuntu/Linux template used by load balancers"
+}
+
+variable "talos_install_disk" {
+  type    = string
+  default = "/dev/sda"
+  validation {
+    condition     = contains(["/dev/sda", "/dev/vda"], var.talos_install_disk)
+    error_message = "talos_install_disk muss /dev/sda oder /dev/vda sein."
+  }
 }
 
 variable "datastore_id" {

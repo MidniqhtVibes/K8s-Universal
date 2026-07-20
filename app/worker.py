@@ -23,9 +23,20 @@ from .generator import proxmox_vm_name, render_cluster
 from .manifests import render_snapshot
 from .models import ApplicationBundle, Cluster, ClusterStatus, CredentialKind, Job, JobKind, JobStatus, ManifestRevision
 from .proxmox import ProxmoxClient
-from .schemas import ClusterConfig
+from .schemas import ClusterConfig, ClusterType
 from .security import redact
-from .services import credential_payload, validate_template_disk_size
+from .services import credential_payload, validate_template_disk_sizes
+from .talos import (
+    TALOS_API_PORT,
+    calico_custom_resources,
+    config_generation_command,
+    global_machine_patch,
+    node_machine_patch,
+    secrets_command,
+    secure_talos_workspace,
+    write_secure_yaml,
+    write_secure_yaml_documents,
+)
 from .terraform_state import managed_vm_ids
 
 
@@ -116,6 +127,59 @@ def run_command(
     if code not in allowed_codes:
         raise RuntimeError(f"Befehl fehlgeschlagen ({code}): {' '.join(command)}")
     return code
+
+
+def command_succeeds(
+    job: Job,
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    *,
+    timeout: int = 20,
+) -> bool:
+    """Run a quiet, read-only probe without exposing its output in job logs."""
+    ensure_not_cancelled(job.id)
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    ensure_not_cancelled(job.id)
+    return result.returncode == 0
+
+
+def quiet_command_output(
+    job: Job,
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    *,
+    timeout: int = 20,
+) -> tuple[bool, str]:
+    """Run a read-only probe and return output without writing it to job logs."""
+    ensure_not_cancelled(job.id)
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False, ""
+    ensure_not_cancelled(job.id)
+    return result.returncode == 0, result.stdout or ""
 
 
 def terraform_parallelism_arg() -> str:
@@ -227,6 +291,8 @@ def failure_summary(error: Exception, log: str = "") -> str | None:
 
 
 def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
+    if config.ssh is None:
+        raise RuntimeError("SSH-Konfiguration für kubeadm fehlt")
     deadline = time.monotonic() + settings.ssh_wait_timeout
     pending = {str(node.ip) for node in config.nodes}
     while pending and time.monotonic() < deadline:
@@ -243,6 +309,55 @@ def wait_for_ssh(job: Job, config: ClusterConfig) -> None:
             time.sleep(5)
     if pending:
         raise RuntimeError(f"SSH-Timeout für: {', '.join(sorted(pending))}")
+
+
+def wait_for_load_balancer_ssh(job: Job, config: ClusterConfig) -> None:
+    ssh = config.load_balancer_ssh
+    if ssh is None:
+        raise RuntimeError("SSH-Konfiguration für Talos-Load-Balancer fehlt")
+    deadline = time.monotonic() + settings.ssh_wait_timeout
+    pending = {str(node.ip) for node in config.nodes if node.role == "loadbalancer"}
+    while pending and time.monotonic() < deadline:
+        ensure_not_cancelled(job.id)
+        for ip in list(pending):
+            try:
+                with socket.create_connection((ip, ssh.port), timeout=3):
+                    pending.remove(ip)
+                    append_log(job.id, f"[Ansible] Load-Balancer per SSH erreichbar: {ip}\n")
+            except OSError:
+                pass
+        if pending:
+            append_log(job.id, "")
+            time.sleep(5)
+    if pending:
+        raise RuntimeError(f"SSH-Timeout für Load-Balancer: {', '.join(sorted(pending))}")
+
+
+def wait_for_talos_api(job: Job, config: ClusterConfig) -> None:
+    deadline = time.monotonic() + settings.ssh_wait_timeout
+    pending = {
+        str(node.ip)
+        for node in config.nodes
+        if node.role in {"control_plane", "worker"}
+    }
+    while pending and time.monotonic() < deadline:
+        ensure_not_cancelled(job.id)
+        for ip in list(pending):
+            try:
+                with socket.create_connection((ip, TALOS_API_PORT), timeout=3):
+                    pending.remove(ip)
+                    append_log(job.id, f"[Talos] API erreichbar: {ip}:{TALOS_API_PORT}\n")
+            except OSError:
+                pass
+        if pending:
+            append_log(job.id, "")
+            time.sleep(5)
+    if pending:
+        raise RuntimeError(
+            "Talos-API-Timeout für: "
+            + ", ".join(sorted(pending))
+            + ". Das Talos-Template muss NoCloud-Netzwerkdaten im Maintenance Mode verarbeiten."
+        )
 
 
 def configured_guest_ipv4_addresses(guest_config: dict) -> set[IPv4Address]:
@@ -283,13 +398,27 @@ def validate_proxmox(job: Job, config: ClusterConfig, api_token: str, workspace:
         raise RuntimeError(f"Bridge {config.proxmox.bridge} ist auf {config.proxmox.node} nicht verfügbar")
     resources = discovery.get("vms", [])
     try:
-        template_disk_gb = validate_template_disk_size(config, discovery)
+        template_disks = validate_template_disk_sizes(config, discovery)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
-    append_log(
-        job.id,
-        f"Template-Disk geprüft: mindestens {template_disk_gb} GB für alle Cluster-Nodes.\n",
-    )
+    # Preserve the existing one-line kubeadm log while validating and logging
+    # both live templates for Talos below.
+    template_disk_gb = template_disks[config.proxmox.template_vm_id]
+    if config.cluster_type == ClusterType.TALOS:
+        append_log(
+            job.id,
+            "Talos-Template-Zuordnung: "
+            + ", ".join(
+                f"VM-ID {vm_id} >= {disk_gb} GB"
+                for vm_id, disk_gb in sorted(template_disks.items())
+            )
+            + ".\n",
+        )
+    else:
+        append_log(
+            job.id,
+            f"Template-Disk geprüft: mindestens {template_disk_gb} GB für alle Cluster-Nodes.\n",
+        )
     resource_entries = []
     for item in resources if isinstance(resources, list) else []:
         if not isinstance(item, dict):
@@ -413,6 +542,514 @@ def run_ingress_tests(job: Job, documents: list[dict], api_vip: str) -> None:
     append_log(job.id, "".join(f"{command}\n" for command in commands))
 
 
+def run_traefik_stack(
+    job: Job,
+    config: ClusterConfig,
+    workspace: Path,
+    ansible_dir: Path,
+    kubeconfig: Path,
+    env: dict[str, str],
+    secrets: list[str],
+) -> None:
+    if not config.addons.ingress.enabled:
+        return
+    run_command(job, ["helm", "repo", "add", "traefik", "https://traefik.github.io/charts", "--force-update"], workspace, env, secrets)
+    run_command(job, ["helm", "repo", "update"], workspace, env, secrets)
+    run_command(
+        job,
+        [
+            "helm", "upgrade", "--install", "traefik", "traefik/traefik",
+            "--version", config.addons.ingress.chart_version,
+            "--namespace", "traefik", "--create-namespace",
+            "--wait", "--wait-for-jobs", "--timeout", "10m",
+            "-f", str(workspace / "generated" / "traefik-values.yaml"),
+            "--kubeconfig", str(kubeconfig),
+        ],
+        workspace,
+        env,
+        secrets,
+    )
+    run_command(job, ["ansible-playbook", "-i", "inventory.generated.yml", "playbooks/02-loadbalancer.yml"], ansible_dir, env, secrets)
+
+
+def run_load_balancer_stack(
+    job: Job,
+    ansible_dir: Path,
+    env: dict[str, str],
+    secrets: list[str],
+) -> None:
+    """Configure only the Ubuntu load balancers of a Talos cluster."""
+    for playbook in (
+        "playbooks/00-wait-for-hosts.yml",
+        "playbooks/00-check.yml",
+        "playbooks/01-bootstrap-os.yml",
+        "playbooks/02-loadbalancer.yml",
+    ):
+        run_command(
+            job,
+            ["ansible-playbook", "-i", "inventory.generated.yml", playbook, "--limit", "loadbalancer"],
+            ansible_dir,
+            env,
+            secrets,
+        )
+
+
+def prepare_talos_assets(
+    job: Job,
+    config: ClusterConfig,
+    workspace: Path,
+    env: dict[str, str],
+    secrets: list[str],
+) -> tuple[Path, dict[str, Path]]:
+    if config.talos is None:
+        raise RuntimeError("Talos-Konfiguration fehlt")
+    talos_dir = workspace / "talos"
+    secure_talos_workspace(talos_dir)
+    secrets_path = talos_dir / "secrets.yaml"
+    controlplane_path = talos_dir / "controlplane.yaml"
+    worker_path = talos_dir / "worker.yaml"
+    talosconfig_path = talos_dir / "talosconfig"
+    sensitive_outputs = (controlplane_path, worker_path, talosconfig_path)
+
+    append_log(job.id, "[Talos] Bereite stabile Machine-Config und Cluster-PKI vor.\n")
+    if not secrets_path.is_file():
+        with tempfile.TemporaryDirectory(prefix=".secrets-", dir=talos_dir) as temporary_name:
+            temporary_secret = Path(temporary_name) / "secrets.yaml"
+            if controlplane_path.is_file():
+                command = [
+                    "talosctl", "gen", "secrets",
+                    "--from-controlplane-config", str(controlplane_path),
+                    "--talos-version", config.talos.version.value,
+                    "--output-file", str(temporary_secret),
+                ]
+            elif any(path.exists() for path in sensitive_outputs):
+                raise RuntimeError(
+                    "Talos-PKI ist unvollständig. Vorhandene Machine-Configs nicht mit neuen Secrets überschreiben; "
+                    "bitte den Cluster-Workspace aus einem Backup wiederherstellen."
+                )
+            else:
+                command = secrets_command(config, temporary_secret)
+            run_command(job, command, talos_dir, env, secrets)
+            os.chmod(temporary_secret, 0o600)
+            os.replace(temporary_secret, secrets_path)
+
+    global_patch_path = talos_dir / "common.patch.yaml"
+    write_secure_yaml_documents(global_patch_path, global_machine_patch(config))
+    node_configs: dict[str, Path] = {}
+    with tempfile.TemporaryDirectory(prefix=".render-", dir=talos_dir) as temporary_name:
+        staging = Path(temporary_name)
+        os.chmod(staging, 0o700)
+        run_command(
+            job,
+            config_generation_command(config, staging, secrets_path, global_patch_path),
+            talos_dir,
+            env,
+            secrets,
+        )
+        staged_nodes = staging / "nodes"
+        staged_nodes.mkdir(mode=0o700)
+        for node in config.nodes:
+            if node.role == "loadbalancer":
+                continue
+            patch_path = staging / f"{node.name}.patch.yaml"
+            write_secure_yaml_documents(patch_path, node_machine_patch(config, node))
+            base_path = staging / ("controlplane.yaml" if node.role == "control_plane" else "worker.yaml")
+            node_path = staged_nodes / f"{node.name}.yaml"
+            run_command(
+                job,
+                [
+                    "talosctl", "machineconfig", "patch", str(base_path),
+                    "--patch", f"@{patch_path}", "--output", str(node_path),
+                ],
+                talos_dir,
+                env,
+                secrets,
+            )
+            os.chmod(node_path, 0o600)
+            run_command(
+                job,
+                ["talosctl", "validate", "--config", str(node_path), "--mode", "cloud", "--strict"],
+                talos_dir,
+                env,
+                secrets,
+            )
+
+        for name in ("controlplane.yaml", "worker.yaml", "talosconfig"):
+            staged_path = staging / name
+            if not staged_path.is_file():
+                raise RuntimeError(f"talosctl hat {name} nicht erzeugt")
+            os.chmod(staged_path, 0o600)
+            os.replace(staged_path, talos_dir / name)
+        live_nodes = talos_dir / "nodes"
+        live_nodes.mkdir(exist_ok=True, mode=0o700)
+        os.chmod(live_nodes, 0o700)
+        for staged_path in staged_nodes.glob("*.yaml"):
+            destination = live_nodes / staged_path.name
+            os.replace(staged_path, destination)
+            node_configs[staged_path.stem] = destination
+
+    calico_path = talos_dir / "calico-custom-resources.yaml"
+    write_secure_yaml_documents(calico_path, calico_custom_resources(config))
+    secure_talos_workspace(talos_dir)
+    return talos_dir, node_configs
+
+
+def _talos_connection_args(ip: str, talosconfig: Path) -> list[str]:
+    return ["--nodes", ip, "--endpoints", ip, "--talosconfig", str(talosconfig)]
+
+
+def _parse_talos_server_version(output: str) -> str | None:
+    _, separator, server_output = output.partition("Server:")
+    if not separator:
+        return None
+    match = re.search(r"\bv\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\b", server_output)
+    return match.group(0) if match else None
+
+
+def _talos_authenticated_version(
+    job: Job,
+    ip: str,
+    talosconfig: Path,
+    cwd: Path,
+    env: dict[str, str],
+) -> str | None:
+    succeeded, output = quiet_command_output(
+        job,
+        ["talosctl", "version", "--short", *_talos_connection_args(ip, talosconfig)],
+        cwd,
+        env,
+    )
+    return _parse_talos_server_version(output) if succeeded else None
+
+
+def _talos_maintenance_version(job: Job, ip: str, cwd: Path, env: dict[str, str]) -> str | None:
+    succeeded, output = quiet_command_output(
+        job,
+        ["talosctl", "version", "--short", "--nodes", ip, "--endpoints", ip, "--insecure"],
+        cwd,
+        env,
+    )
+    return _parse_talos_server_version(output) if succeeded else None
+
+
+def classify_talos_nodes(
+    job: Job,
+    config: ClusterConfig,
+    talosconfig: Path,
+    cwd: Path,
+    env: dict[str, str],
+) -> dict[str, str]:
+    """Classify every node before mutating any of them.
+
+    This prevents a foreign/stale PKI on a later node from leaving an earlier
+    maintenance node partially joined to the new cluster.
+    """
+    if config.talos is None:
+        raise RuntimeError("Talos-Konfiguration fehlt")
+    expected_version = config.talos.version.value
+    pending = {
+        str(node.ip): node.name
+        for node in config.nodes
+        if node.role != "loadbalancer"
+    }
+    states: dict[str, str] = {}
+    deadline = time.monotonic() + settings.ssh_wait_timeout
+    while pending and time.monotonic() < deadline:
+        for ip, name in list(pending.items()):
+            authenticated_version = _talos_authenticated_version(job, ip, talosconfig, cwd, env)
+            if authenticated_version is not None:
+                if authenticated_version != expected_version:
+                    raise RuntimeError(
+                        f"Talos-Node {name} ({ip}) läuft mit {authenticated_version}, erwartet wird {expected_version}. "
+                        "Automatische Talos-Upgrades sind nicht aktiviert."
+                    )
+                states[ip] = "authenticated"
+                pending.pop(ip)
+                continue
+            maintenance_version = _talos_maintenance_version(job, ip, cwd, env)
+            if maintenance_version is not None:
+                if maintenance_version != expected_version:
+                    raise RuntimeError(
+                        f"Talos-Template auf {name} ({ip}) läuft mit {maintenance_version}, erwartet wird {expected_version}."
+                    )
+                states[ip] = "maintenance"
+                pending.pop(ip)
+        if pending:
+            append_log(job.id, "")
+            time.sleep(5)
+    if pending:
+        unresolved = ", ".join(f"{name} ({ip})" for ip, name in sorted(pending.items()))
+        raise RuntimeError(
+            "Talos-API-Zustand konnte nicht sicher bestimmt werden: " + unresolved + ". "
+            "Die Nodes müssen entweder unkonfiguriert im Maintenance Mode oder mit dieser Cluster-PKI erreichbar sein."
+        )
+    return states
+
+
+def wait_for_authenticated_talos(
+    job: Job,
+    nodes: list[str],
+    talosconfig: Path,
+    cwd: Path,
+    env: dict[str, str],
+    expected_version: str,
+) -> None:
+    deadline = time.monotonic() + settings.ssh_wait_timeout
+    pending = set(nodes)
+    while pending and time.monotonic() < deadline:
+        for ip in list(pending):
+            version = _talos_authenticated_version(job, ip, talosconfig, cwd, env)
+            if version == expected_version:
+                pending.remove(ip)
+                append_log(job.id, f"[Talos] Authentifizierte API bereit: {ip}\n")
+            elif version is not None:
+                raise RuntimeError(f"Talos-Node {ip} läuft mit {version}, erwartet wird {expected_version}")
+        if pending:
+            append_log(job.id, "")
+            time.sleep(5)
+    if pending:
+        raise RuntimeError(f"Talos-Nodes wurden nach Machine-Config nicht bereit: {', '.join(sorted(pending))}")
+
+
+def apply_talos_machine_configs(
+    job: Job,
+    config: ClusterConfig,
+    talos_dir: Path,
+    node_configs: dict[str, Path],
+    env: dict[str, str],
+    secrets: list[str],
+) -> None:
+    talosconfig = talos_dir / "talosconfig"
+    nodes = [node for node in config.nodes if node.role != "loadbalancer"]
+    wait_for_talos_api(job, config)
+    states = classify_talos_nodes(job, config, talosconfig, talos_dir, env)
+    for node in nodes:
+        ip = str(node.ip)
+        node_config = node_configs[node.name]
+        if states[ip] == "authenticated":
+            append_log(job.id, f"[Talos] Gleiche bestehende Machine-Config ab: {node.name} ({ip}).\n")
+            command = [
+                "talosctl", "apply-config", *_talos_connection_args(ip, talosconfig),
+                "--file", str(node_config), "--mode", "auto",
+            ]
+        else:
+            append_log(job.id, f"[Talos] Initiale Machine-Config: {node.name} ({ip}).\n")
+            command = [
+                "talosctl", "apply-config", "--nodes", ip, "--endpoints", ip,
+                "--insecure", "--file", str(node_config), "--mode", "auto",
+            ]
+        run_command(job, command, talos_dir, env, secrets)
+        wait_for_authenticated_talos(
+            job, [ip], talosconfig, talos_dir, env, config.talos.version.value
+        )
+
+
+def ensure_talos_bootstrap(
+    job: Job,
+    config: ClusterConfig,
+    talos_dir: Path,
+    env: dict[str, str],
+    secrets: list[str],
+) -> str:
+    bootstrap_node = next(node for node in config.nodes if node.role == "control_plane")
+    bootstrap_ip = str(bootstrap_node.ip)
+    talosconfig = talos_dir / "talosconfig"
+    args = _talos_connection_args(bootstrap_ip, talosconfig)
+    requested_marker = talos_dir / "bootstrap.requested.yaml"
+    complete_marker = talos_dir / "bootstrap.complete.yaml"
+    members_command = ["talosctl", "etcd", "members", *args]
+    if command_succeeds(job, members_command, talos_dir, env, timeout=30):
+        write_secure_yaml(complete_marker, {"node": bootstrap_node.name, "confirmed": True})
+        append_log(job.id, "[Talos] etcd ist bereits gebootstrapped; kein erneuter Bootstrap.\n")
+        return bootstrap_ip
+    bootstrap_error: RuntimeError | None = None
+    if requested_marker.exists() or complete_marker.exists():
+        append_log(
+            job.id,
+            "[Talos] Vorheriger Bootstrap-Auftrag gefunden; prüfe ausschließlich den Remote-Zustand.\n",
+        )
+    else:
+        write_secure_yaml(requested_marker, {"node": bootstrap_node.name, "requested": True})
+        append_log(job.id, f"[Talos] Bootstrap einmalig auf {bootstrap_node.name}.\n")
+        try:
+            run_command(job, ["talosctl", "bootstrap", *args], talos_dir, env, secrets)
+        except JobCancelled:
+            raise
+        except RuntimeError as exc:
+            # A transport error can happen after the server accepted bootstrap.
+            # The only safe decision is based on the remote etcd postcondition.
+            bootstrap_error = exc
+            append_log(job.id, "[Talos] Bootstrap-Antwort war unklar; prüfe etcd ohne erneuten Bootstrap.\n")
+    deadline = time.monotonic() + settings.ssh_wait_timeout
+    while time.monotonic() < deadline:
+        if command_succeeds(job, members_command, talos_dir, env, timeout=30):
+            write_secure_yaml(complete_marker, {"node": bootstrap_node.name, "confirmed": True})
+            return bootstrap_ip
+        append_log(job.id, "")
+        time.sleep(5)
+    error = RuntimeError(
+        "Talos-etcd wurde nach dem einmaligen Bootstrap-Auftrag nicht bereit; "
+        "ein automatischer zweiter Bootstrap wird aus Sicherheitsgründen nicht ausgeführt"
+    )
+    if bootstrap_error is not None:
+        raise error from bootstrap_error
+    raise error
+
+
+def fetch_talos_kubeconfig(
+    job: Job,
+    config: ClusterConfig,
+    workspace: Path,
+    talos_dir: Path,
+    bootstrap_ip: str,
+    env: dict[str, str],
+    secrets: list[str],
+) -> Path:
+    talosconfig = talos_dir / "talosconfig"
+    destination = workspace / "kubeconfig"
+    with tempfile.TemporaryDirectory(prefix=".kubeconfig-", dir=talos_dir) as temporary_name:
+        staging = Path(temporary_name)
+        os.chmod(staging, 0o700)
+        run_command(
+            job,
+            [
+                "talosctl", "kubeconfig", str(staging), "--merge=false", "--force",
+                *_talos_connection_args(bootstrap_ip, talosconfig),
+            ],
+            talos_dir,
+            env,
+            secrets,
+        )
+        candidate = staging / "kubeconfig"
+        if not candidate.is_file():
+            raise RuntimeError("talosctl hat keine kubeconfig erzeugt")
+        try:
+            kubeconfig_document = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+            servers = {
+                cluster_entry["cluster"]["server"]
+                for cluster_entry in kubeconfig_document["clusters"]
+            }
+        except (KeyError, TypeError, yaml.YAMLError) as exc:
+            raise RuntimeError("Talos-kubeconfig ist nicht gültig") from exc
+        expected_server = f"https://{config.network.api_vip}:{config.kubernetes.api_port}"
+        if servers != {expected_server}:
+            raise RuntimeError("Talos-kubeconfig verwendet nicht die konfigurierte API-VIP")
+        os.chmod(candidate, 0o600)
+        deadline = time.monotonic() + settings.ssh_wait_timeout
+        while time.monotonic() < deadline:
+            if command_succeeds(
+                job,
+                ["kubectl", "--kubeconfig", str(candidate), "get", "--raw=/readyz"],
+                workspace,
+                env,
+                timeout=30,
+            ):
+                os.replace(candidate, destination)
+                os.chmod(destination, 0o600)
+                append_log(job.id, "[Talos] kubeconfig atomar im Cluster-Workspace gespeichert.\n")
+                return destination
+            append_log(job.id, "")
+            time.sleep(5)
+    raise RuntimeError("Kubernetes-API wurde nach dem Talos-Bootstrap nicht bereit")
+
+
+def install_talos_calico(
+    job: Job,
+    config: ClusterConfig,
+    workspace: Path,
+    talos_dir: Path,
+    kubeconfig: Path,
+    env: dict[str, str],
+    secrets: list[str],
+) -> None:
+    kubectl = ["kubectl", "--kubeconfig", str(kubeconfig)]
+    base_url = f"https://raw.githubusercontent.com/projectcalico/calico/{config.addons.cni.version}/manifests"
+    append_log(job.id, "[Calico] Installiere Talos-kompatibles NFTables/VXLAN-Profil.\n")
+    run_command(
+        job,
+        [*kubectl, "apply", "--server-side", "--force-conflicts", "-f", f"{base_url}/v1_crd_projectcalico_org.yaml"],
+        workspace,
+        env,
+        secrets,
+    )
+    run_command(
+        job,
+        [*kubectl, "apply", "--server-side", "--force-conflicts", "-f", f"{base_url}/tigera-operator.yaml"],
+        workspace,
+        env,
+        secrets,
+    )
+    run_command(
+        job,
+        [
+            *kubectl, "wait", "--for=condition=Established",
+            "crd/installations.operator.tigera.io", "crd/apiservers.operator.tigera.io",
+            "--timeout=180s",
+        ],
+        workspace,
+        env,
+        secrets,
+    )
+    run_command(
+        job,
+        [*kubectl, "-n", "tigera-operator", "rollout", "status", "deployment/tigera-operator", "--timeout=300s"],
+        workspace,
+        env,
+        secrets,
+    )
+    run_command(
+        job,
+        [
+            *kubectl, "apply", "--server-side", "--force-conflicts",
+            "-f", str(talos_dir / "calico-custom-resources.yaml"),
+        ],
+        workspace,
+        env,
+        secrets,
+    )
+    run_command(job, [*kubectl, "wait", "--for=condition=Ready", "nodes", "--all", "--timeout=600s"], workspace, env, secrets)
+    run_command(job, [*kubectl, "-n", "kube-system", "rollout", "restart", "deployment/coredns"], workspace, env, secrets)
+    run_command(job, [*kubectl, "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=300s"], workspace, env, secrets)
+
+
+def run_talos_stack(
+    job: Job,
+    config: ClusterConfig,
+    workspace: Path,
+    ansible_dir: Path,
+    kubeconfig: Path,
+    env: dict[str, str],
+    secrets: list[str],
+    prepared_assets: tuple[Path, dict[str, Path]] | None = None,
+) -> None:
+    append_log(job.id, "Provisionierungsmodus: Talos\n")
+    wait_for_load_balancer_ssh(job, config)
+    append_log(job.id, "[Ansible] Konfiguriere ausschließlich die Ubuntu-Load-Balancer.\n")
+    run_load_balancer_stack(job, ansible_dir, env, secrets)
+    talos_dir, node_configs = prepared_assets or prepare_talos_assets(job, config, workspace, env, secrets)
+    apply_talos_machine_configs(job, config, talos_dir, node_configs, env, secrets)
+    bootstrap_ip = ensure_talos_bootstrap(job, config, talos_dir, env, secrets)
+    fetch_talos_kubeconfig(job, config, workspace, talos_dir, bootstrap_ip, env, secrets)
+    install_talos_calico(job, config, workspace, talos_dir, kubeconfig, env, secrets)
+    run_traefik_stack(job, config, workspace, ansible_dir, kubeconfig, env, secrets)
+    if config.registry_enabled:
+        append_log(job.id, "[Registry] Talos RegistryMirrorConfig ist auf den Kubernetes-Nodes aktiv.\n")
+    control_planes = ",".join(str(node.ip) for node in config.nodes if node.role == "control_plane")
+    workers = ",".join(str(node.ip) for node in config.nodes if node.role == "worker")
+    run_command(
+        job,
+        [
+            "talosctl", "health", "--nodes", bootstrap_ip, "--endpoints", bootstrap_ip,
+            "--control-plane-nodes", control_planes, "--worker-nodes", workers,
+            "--talosconfig", str(talos_dir / "talosconfig"), "--wait-timeout", "10m",
+        ],
+        talos_dir,
+        env,
+        secrets,
+    )
+    verify_cluster(job, config, workspace, env, secrets)
+
+
 def run_ansible_stack(
     job: Job,
     config: ClusterConfig,
@@ -492,7 +1129,7 @@ def execute(job_id: str) -> None:
         # up compatible runner changes after an application update.
         render_cluster(config, workspace, settings.source_root)
         proxmox = credential_payload(db, config.proxmox.credential_ref, CredentialKind.PROXMOX)
-        ssh = credential_payload(db, config.ssh.credential_ref, CredentialKind.SSH)
+        ssh = credential_payload(db, config.provisioning_ssh.credential_ref, CredentialKind.SSH)
 
     workspace = settings.data_root / "clusters" / config.id
     terraform_dir = workspace / "terraform"
@@ -537,6 +1174,11 @@ def execute(job_id: str) -> None:
             # changes. Re-run the read-only collision checks directly before
             # consuming and applying it to close that race window.
             validate_proxmox(job, config, token, workspace)
+            prepared_talos_assets = None
+            if config.cluster_type == ClusterType.TALOS:
+                # Generate persistent PKI before creating VMs. A worker crash
+                # after Terraform must never cause replacement cluster secrets.
+                prepared_talos_assets = prepare_talos_assets(job, config, workspace, env, secrets)
             invalidate_plan_authorization(config.id, status=ClusterStatus.APPLYING)
             try:
                 run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "tfplan"], terraform_dir, env, secrets)
@@ -553,7 +1195,14 @@ def execute(job_id: str) -> None:
                     cluster.applied_hash = job.requested_config_hash
                     cluster.applied_vm_ids = sorted(state_ids)
                     db.commit()
-            run_ansible_stack(job, config, workspace, ansible_dir, kubeconfig, env, secrets)
+            if config.cluster_type == ClusterType.KUBEADM:
+                append_log(job.id, "Provisionierungsmodus: Kubernetes / kubeadm\n")
+                run_ansible_stack(job, config, workspace, ansible_dir, kubeconfig, env, secrets)
+            else:
+                run_talos_stack(
+                    job, config, workspace, ansible_dir, kubeconfig, env, secrets,
+                    prepared_assets=prepared_talos_assets,
+                )
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
@@ -567,8 +1216,12 @@ def execute(job_id: str) -> None:
                 if cluster:
                     cluster.status = ClusterStatus.APPLYING
                     db.commit()
-            append_log(job.id, "Ansible/Helm/Verify wird ohne Terraform erneut ausgefuehrt.\n")
-            run_ansible_stack(job, config, workspace, ansible_dir, kubeconfig, env, secrets)
+            if config.cluster_type == ClusterType.KUBEADM:
+                append_log(job.id, "Ansible/Helm/Verify wird ohne Terraform erneut ausgefuehrt.\n")
+                run_ansible_stack(job, config, workspace, ansible_dir, kubeconfig, env, secrets)
+            else:
+                append_log(job.id, "Talos/LB/Calico/Helm/Verify wird ohne Terraform fortgesetzt.\n")
+                run_talos_stack(job, config, workspace, ansible_dir, kubeconfig, env, secrets)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:
@@ -594,6 +1247,9 @@ def execute(job_id: str) -> None:
                 run_command(job, ["terraform", "apply", "-input=false", terraform_parallelism_arg(), "destroy.tfplan"], terraform_dir, env, secrets)
             finally:
                 plan_path.unlink(missing_ok=True)
+            if config.cluster_type == ClusterType.TALOS:
+                for marker in ("bootstrap.requested.yaml", "bootstrap.complete.yaml"):
+                    (workspace / "talos" / marker).unlink(missing_ok=True)
             with SessionLocal() as db:
                 cluster = db.get(Cluster, config.id)
                 if cluster:

@@ -91,6 +91,77 @@ Builder prüft diese Regel beim Speichern sowie erneut vor Terraform-Plan und
 -Apply gegen die aktuellen Proxmox-Daten. Fehlt die Größenangabe, wird der
 Vorgang mit einer verständlichen Fehlermeldung gestoppt.
 
+### Talos-Cluster
+
+Der Wizard bietet zusätzlich zum unveränderten Ubuntu-/Ansible-/kubeadm-Pfad
+den Cluster-Typ **Talos Linux** an. Dabei bleiben die Load Balancer Ubuntu-VMs
+mit HAProxy und Keepalived. Nur Control Planes und Worker verwenden Talos und
+werden über die Talos-API statt über SSH provisioniert. Deshalb ist die
+allgemeine SSH-Konfiguration bei `talos` tatsächlich `null`; ein getrenntes
+SSH-Credential bleibt ausschließlich für die beiden Ubuntu-Load-Balancer
+erforderlich.
+
+Aktuell ist diese Kombination fest unterstützt:
+
+- Talos `v1.13.6`
+- Kubernetes `v1.36` mit dem exakten Patchstand `1.36.2`
+- Calico im Talos-Profil mit deaktivierter Standard-CNI, NFTables und VXLAN
+- unveränderte Traefik-, Kubeconfig- und Anwendungsfunktionen nach dem Bootstrap
+
+Der Proxmox-Abschnitt benötigt zwei verschiedene vorhandene Templates:
+
+- **Talos-Template** für Control Planes und Worker
+- **Ubuntu-/Linux-Template** für die SSH-verwalteten Load Balancer
+
+Das Talos-Template wird nicht vom Builder erstellt. Es muss ein
+unkonfiguriertes NoCloud-Template der ausgewählten Talos-Version sein. Die von
+Terraform erzeugte NoCloud-Netzwerkkonfiguration muss bereits im Maintenance
+Mode die im Wizard gewählte statische IP, das Gateway und DNS bereitstellen;
+erst danach kann der Worker die Talos-API auf TCP-Port `50000` erreichen. Das
+Template darf keine Machine Identity oder Machine Configuration eines anderen
+Clusters enthalten. Die Netzwerkschnittstelle (standardmäßig `eth0`) und die
+Installationsdisk (`/dev/sda` oder `/dev/vda`) müssen zur VM-Hardware passen.
+Der Builder ordnet `/dev/sda` dabei `scsi0` und `/dev/vda` ausschließlich auf
+Talos-Nodes `virtio0` zu; das Ubuntu-LB-Template bleibt immer bei `scsi0`.
+Firewalls müssen TCP `50000` zu allen Talos-Nodes und TCP `50001` von Workern
+zu Control Planes zusätzlich zu den Kubernetes-/etcd-Verbindungen zulassen.
+DNS, Zeitsynchronisation sowie ausgehender Zugriff auf das Talos-Installer-Image
+und die benötigten Kubernetes-/Calico-Images müssen bereits beim ersten Start
+funktionieren.
+
+Für Proxmox gilt zusätzlich: UEFI/q35 und eine normale VirtIO-SCSI-Disk sind
+die sichere Ausgangsbasis; SCSI Single und Memory Ballooning sollen vermieden
+werden. Der Builder deaktiviert den QEMU Guest Agent auf Talos-Nodes, weil er
+ohne die entsprechende Talos-Systemerweiterung nicht verfügbar ist. Auf den
+Ubuntu-Load-Balancern bleibt der Agent aktiv.
+
+Der Worker erzeugt die Cluster-PKI einmalig unter
+`/data/clusters/<id>/talos/`, setzt Verzeichnisse auf `0700` und sensible
+Dateien auf `0600` und schreibt keine Machine Config oder Schlüssel in das
+Joblog. Vor einer Änderung werden alle Talos-Nodes vollständig als eigener,
+authentifizierter Node oder unkonfigurierter Maintenance-Node klassifiziert.
+Ein Node mit fremder PKI oder abweichender Talos-Version stoppt den Lauf, bevor
+irgendein Node verändert wird. Der etcd-Bootstrap wird genau einmal angefordert
+und anhand des Remote-Zustands bestätigt; ein unklarer CLI-Fehler löst niemals
+automatisch einen zweiten Bootstrap aus. Nach erfolgreichem Destroy werden nur
+die Bootstrap-Marker entfernt, sodass ein bewusster Neuaufbau mit derselben
+Cluster-PKI wieder möglich ist.
+
+Cluster-Typ und Talos-Version sind gesperrt, sobald ein Deployment oder auch
+ein partieller Terraform-State existiert. Ein Wechsel oder In-Place-Upgrade ist
+nicht Bestandteil dieser Version; dafür muss ein neuer Cluster angelegt werden.
+Die bestehende harte Netzwerkregel bleibt erhalten: API-VIP, Gateway und alle
+Node-IP-Adressen müssen im VM-CIDR liegen. Geroutete externe VIPs werden in
+dieser ersten Talos-Erweiterung nicht freigeschaltet.
+
+Bei einer privaten Registry erzeugt Talos eine native
+`RegistryMirrorConfig` für genau den angegebenen direkten Endpoint. HTTP bleibt
+auf vertrauenswürdige Labornetze beschränkt. Registry-Authentifizierung,
+benutzerdefinierte CA-Zertifikate und das Abschalten der TLS-Prüfung sind nicht
+Teil dieser ersten Integration; ein solches Setup muss vorerst außerhalb des
+Builders vorbereitet oder als HTTPS-Endpoint mit öffentlich vertrauenswürdiger
+CA bereitgestellt werden.
+
 ### Optionale Container-Registry
 
 Im Wizard kann unter **Container Registry** genau ein privater Registry-Endpunkt

@@ -4,7 +4,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.models import ClusterStatus
+from app.generator import config_hash
+from app.models import Cluster, ClusterStatus
+from app.schemas import ClusterConfig
 from app.services import save_cluster
 from .helpers import valid_config
 
@@ -67,3 +69,56 @@ def test_edit_invalidates_runtime_and_remembers_previously_applied_vm_ids(tmp_pa
         assert cluster.applied_hash != cluster.config_hash
         assert set(cluster.applied_vm_ids or []) == {node.vm_id for node in config.nodes}
         assert not kubeconfig.exists()
+
+
+def test_legacy_defaults_do_not_invalidate_an_unchanged_ready_cluster(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    source = Path(__file__).parents[1]
+    config = valid_config()
+    legacy = config.model_dump(mode="json")
+    for field in ("cluster_type", "load_balancer_ssh", "talos"):
+        legacy.pop(field, None)
+    legacy["proxmox"].pop("load_balancer_template_vm_id", None)
+    legacy_digest = config_hash(legacy)
+
+    with Session(engine) as db:
+        cluster = Cluster(
+            id=config.id,
+            name=config.name,
+            config=legacy,
+            config_hash=legacy_digest,
+            applied_hash=legacy_digest,
+            applied_vm_ids=[node.vm_id for node in config.nodes],
+            status=ClusterStatus.READY,
+        )
+        db.add(cluster)
+        db.commit()
+        kubeconfig = tmp_path / "clusters" / config.id / "kubeconfig"
+        kubeconfig.parent.mkdir(parents=True)
+        kubeconfig.write_text("existing access", encoding="utf-8")
+
+        saved = save_cluster(db, ClusterConfig.model_validate(legacy), tmp_path, source)
+
+        assert saved.config == legacy
+        assert saved.config_hash == legacy_digest
+        assert saved.applied_hash == legacy_digest
+        assert saved.status == ClusterStatus.READY
+        assert kubeconfig.read_text(encoding="utf-8") == "existing access"
+
+
+def test_editing_an_unapplied_draft_does_not_mark_vm_ids_as_deployed(tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    source = Path(__file__).parents[1]
+    config = valid_config()
+
+    with Session(engine) as db:
+        cluster = save_cluster(db, config, tmp_path, source)
+        payload = config.model_dump(mode="json")
+        payload["nodes"][0]["cores"] = 2
+        saved = save_cluster(db, ClusterConfig.model_validate(payload), tmp_path, source)
+
+        assert saved.status == ClusterStatus.DRAFT
+        assert saved.applied_hash is None
+        assert not saved.applied_vm_ids

@@ -38,6 +38,8 @@
 
 <form method="post" action="{{ action }}" id="wizard" class="stack form-page">
   <input type="hidden" name="_submitted" value="1">
+  {% set selected_cluster_type = values.get('cluster_type', 'kubeadm') %}
+  {% if cluster_type_locked %}<input type="hidden" name="cluster_type" value="{{ selected_cluster_type }}">{% endif %}
 
   {% if used_ips or used_vm_ids %}
   <div class="alert alert-info">
@@ -61,6 +63,21 @@
       </div>
       <span class="step-number" aria-hidden="true">01</span>
     </div>
+
+    <fieldset class="cluster-type-selector" aria-describedby="cluster-type-hint">
+      <legend>Cluster-Typ</legend>
+      <label class="cluster-type-option">
+        <input type="radio" name="cluster_type" value="kubeadm" {% if selected_cluster_type == 'kubeadm' %}checked{% endif %} {% if cluster_type_locked %}disabled{% endif %}>
+        <span><strong>Kubernetes / kubeadm</strong><small>Ubuntu, Terraform, Ansible und kubeadm</small></span>
+      </label>
+      <label class="cluster-type-option">
+        <input type="radio" name="cluster_type" value="talos" {% if selected_cluster_type == 'talos' %}checked{% endif %} {% if cluster_type_locked %}disabled{% endif %}>
+        <span><strong>Talos Linux</strong><small>Terraform und deklarative Talos Machine Configuration</small></span>
+      </label>
+      <p id="cluster-type-hint" class="field-hint">
+        {% if cluster_type_locked %}Nach dem ersten Deployment ist der Cluster-Typ gesperrt. Ein Wechsel erfordert einen neuen Cluster.{% else %}Der Typ kann bis zum ersten Deployment geändert werden.{% endif %}
+      </p>
+    </fieldset>
 
     <div class="form-grid">
       <label>
@@ -92,13 +109,22 @@
         <input name="datastore" id="datastore" list="proxmox-storages" value="{{ values.get('datastore','local-lvm') }}" required>
       </label>
       <label>
-        Template-VM-ID
+        <span id="node-template-label">{% if selected_cluster_type == 'talos' %}Talos-Template für Control Plane und Worker{% else %}Ubuntu-/kubeadm-Template{% endif %}</span>
         <input type="number" name="template_vm_id" id="template-vm-id" list="proxmox-templates" value="{{ values.get('template_vm_id','') }}" placeholder="Nach Discovery auswählen" required>
       </label>
+      <label data-cluster-section="talos">
+        Ubuntu-Template für Load Balancer
+        <input type="number" name="load_balancer_template_vm_id" id="load-balancer-template-vm-id" list="proxmox-templates" value="{{ values.get('load_balancer_template_vm_id','') }}" placeholder="Nach Discovery auswählen" {% if selected_cluster_type == 'talos' %}required{% else %}disabled{% endif %}>
+      </label>
       <div class="template-disk-summary" aria-live="polite">
-        <span>Template-Disk</span>
+        <span id="node-template-disk-label">{% if selected_cluster_type == 'talos' %}Talos-Node-Template-Disk{% else %}Template-Disk{% endif %}</span>
         <strong id="template-disk-value">Noch nicht ermittelt</strong>
         <small id="template-disk-message">Proxmox-Ressourcen erkennen und anschließend ein Template auswählen.</small>
+      </div>
+      <div class="template-disk-summary" data-cluster-section="talos" aria-live="polite">
+        <span>Load-Balancer-Template-Disk</span>
+        <strong id="load-balancer-template-disk-value">Noch nicht ermittelt</strong>
+        <small id="load-balancer-template-disk-message">Proxmox-Ressourcen erkennen und das Ubuntu-Template auswählen.</small>
       </div>
       <label>
         Netzwerk-Bridge
@@ -113,6 +139,14 @@
         <span class="switch-control" aria-hidden="true"></span>
         <span class="switch-copy"><strong>Clustername in VM-Namen aufnehmen</strong><small>Erleichtert die Zuordnung bei mehreren Clustern in Proxmox.</small></span>
       </label>
+    </div>
+
+    <div class="alert alert-warning" data-cluster-section="talos" {% if selected_cluster_type != 'talos' %}hidden{% endif %}>
+      <span class="alert-icon">{{ ui.icon('alert') }}</span>
+      <div>
+        <strong>Talos-Template-Vertrag</strong>
+        <p>Das vorhandene Template muss ein sauberes Talos-NoCloud-Image sein, die Proxmox-Netzwerkdaten bereits im Maintenance Mode lesen und Port 50000 unter den geplanten IPs bereitstellen. QEMU Agent bleibt für Talos-Nodes deaktiviert.</p>
+      </div>
     </div>
 
     <datalist id="proxmox-nodes"></datalist>
@@ -226,15 +260,15 @@
         <span class="section-icon">{{ ui.icon('key') }}</span>
         <div>
           <p class="eyebrow">Schritt 04</p>
-          <h2>Zugriff und Kubernetes</h2>
-          <p class="page-subtitle">Hinterlege den SSH-Zugang und die gewünschten Cluster-Komponenten.</p>
+          <h2 id="step-four-title">{% if selected_cluster_type == 'talos' %}Talos und Kubernetes{% else %}Zugriff und Kubernetes{% endif %}</h2>
+          <p class="page-subtitle" id="step-four-subtitle">{% if selected_cluster_type == 'talos' %}Wähle Talos sowie den SSH-Zugang nur für die Ubuntu-Load-Balancer.{% else %}Hinterlege den SSH-Zugang und die gewünschten Cluster-Komponenten.{% endif %}</p>
         </div>
       </div>
       <span class="step-number" aria-hidden="true">04</span>
     </div>
 
     <div class="form-grid">
-      <label>
+      <label id="kubeadm-ssh-credential-field">
         SSH-Credential
         <select name="ssh_credential" id="ssh-credential" required>
           <option value="">Auswählen</option>
@@ -243,11 +277,44 @@
           {% endfor %}
         </select>
       </label>
-      <label>SSH-Benutzer<input name="ssh_user" value="{{ values.get('ssh_user','ubuntu') }}"></label>
-      <label class="wide">
+      <label id="kubeadm-ssh-user-field">SSH-Benutzer<input name="ssh_user" value="{{ values.get('ssh_user','ubuntu') }}"></label>
+      <label class="wide" id="kubeadm-ssh-public-key-field">
         Öffentlicher SSH-Schlüssel
         <textarea name="ssh_public_key" id="ssh-public-key" rows="3" required>{{ values.get('ssh_public_key','') }}</textarea>
         <span class="field-hint">Wird aus dem ausgewählten SSH-Credential übernommen</span>
+      </label>
+      <label data-cluster-section="talos">
+        Talos-Version
+        {% if cluster_type_locked and selected_cluster_type == 'talos' %}<input type="hidden" name="talos_version" value="{{ values.get('talos_version', supported_talos_versions[0]) }}">{% endif %}
+        <select name="talos_version" id="talos-version" {% if selected_cluster_type == 'talos' %}required{% else %}disabled{% endif %} {% if cluster_type_locked and selected_cluster_type == 'talos' %}disabled{% endif %}>
+          {% for version in supported_talos_versions %}<option value="{{ version }}" {% if values.get('talos_version', supported_talos_versions[0]) == version %}selected{% endif %}>{{ version }}</option>{% endfor %}
+        </select>
+      </label>
+      <label data-cluster-section="talos">
+        Talos-Installationsdisk
+        <select name="talos_install_disk" id="talos-install-disk" {% if selected_cluster_type == 'talos' %}required{% else %}disabled{% endif %}>
+          <option value="/dev/sda" {% if values.get('talos_install_disk', '/dev/sda') == '/dev/sda' %}selected{% endif %}>/dev/sda (SCSI)</option>
+          <option value="/dev/vda" {% if values.get('talos_install_disk') == '/dev/vda' %}selected{% endif %}>/dev/vda (VirtIO Block)</option>
+        </select>
+      </label>
+      <label data-cluster-section="talos">
+        Talos-Netzwerkinterface
+        <input name="talos_network_interface" value="{{ values.get('talos_network_interface', 'eth0') }}" pattern="[A-Za-z0-9_.:-]{1,32}" {% if selected_cluster_type == 'talos' %}required{% else %}disabled{% endif %}>
+      </label>
+      <label data-cluster-section="talos">
+        Load-Balancer-SSH-Credential
+        <select name="lb_ssh_credential" id="lb-ssh-credential" {% if selected_cluster_type == 'talos' %}required{% else %}disabled{% endif %}>
+          <option value="">Auswählen</option>
+          {% for item in credentials if item.kind.value == 'ssh' %}
+          <option value="credential://{{ item.id }}" data-public-key="{{ item.public_data.public_key }}" {% if values.get('lb_ssh_credential') == 'credential://' + item.id %}selected{% endif %}>{{ item.name }}</option>
+          {% endfor %}
+        </select>
+        <span class="field-hint">Nur für die Ubuntu-Load-Balancer; Talos-Nodes verwenden kein SSH.</span>
+      </label>
+      <label data-cluster-section="talos">Load-Balancer-SSH-Benutzer<input name="lb_ssh_user" value="{{ values.get('lb_ssh_user','ubuntu') }}" {% if selected_cluster_type != 'talos' %}disabled{% endif %}></label>
+      <label class="wide" data-cluster-section="talos">
+        Öffentlicher Schlüssel für die Load Balancer
+        <textarea name="lb_ssh_public_key" id="lb-ssh-public-key" rows="3" {% if selected_cluster_type == 'talos' %}required{% else %}disabled{% endif %}>{{ values.get('lb_ssh_public_key','') }}</textarea>
       </label>
       <label>
         Kubernetes-Version

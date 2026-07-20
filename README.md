@@ -1,6 +1,6 @@
 # Proxmox Kubernetes Cluster Builder
 
-Web-based builder for HA Kubernetes clusters on Proxmox. The application generates Terraform and Ansible configurations from a wizard, creates the Proxmox VMs, and installs Kubernetes, Calico, and optionally Traefik.
+Web-based builder for HA Kubernetes clusters on Proxmox. The application supports the existing Ubuntu/Ansible/kubeadm path and an additive Talos Linux path for control-plane and worker nodes. It creates the Proxmox VMs and installs Kubernetes, Calico, and optionally Traefik.
 
 The application is provided as prebuilt container images via the GitHub Container Registry (GHCR). For normal operation, the images therefore do not need to be built locally. Installation-specific values such as passwords, secrets, ports, and runtime settings are configured through a dedicated `.env` file.
 
@@ -9,6 +9,7 @@ The application is provided as prebuilt container images via the GitHub Containe
 - Proxmox cluster creation with load balancers, control planes, and workers
 - Terraform Plan, Apply, Destroy Plan, and Destroy through the web interface
 - Provisioning via Terraform, Ansible, and kubeadm
+- Optional Talos Linux provisioning for control-plane and worker nodes
 - HAProxy and Keepalived for the Kubernetes API VIP
 - Calico as the CNI and optionally Traefik as the ingress controller
 - Optional private container registry configuration for every Kubernetes node
@@ -26,6 +27,7 @@ For operation:
 - Docker and Docker Compose
 - A reachable Proxmox host or Proxmox cluster
 - A cloud-init-capable QEMU VM template on the selected Proxmox node
+- For Talos clusters, a separate unconfigured Talos NoCloud template matching the supported Talos version
 - A Proxmox API token with permissions to create, read, and delete VMs
 - Free IP addresses and VM IDs for load balancers, control planes, and workers
 - Network access from the builder/worker to Proxmox

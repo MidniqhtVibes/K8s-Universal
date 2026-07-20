@@ -10,7 +10,7 @@ from .generator import config_hash, render_cluster
 from .allocations import validate_cluster_allocations
 from .models import AuditEvent, Cluster, ClusterStatus, Credential, CredentialKind, Job, JobKind, JobStatus, User
 from .proxmox import ProxmoxClient
-from .schemas import ClusterConfig
+from .schemas import ClusterConfig, ClusterType
 from .security import decrypt_payload, encrypt_payload, hash_password
 
 
@@ -136,6 +136,39 @@ def validate_template_disk_size(config: ClusterConfig, discovery: dict) -> int:
     return template_disk_gb
 
 
+def validate_template_disk_sizes(config: ClusterConfig, discovery: dict) -> dict[int, int]:
+    """Validate role disks against the live template selected for each role.
+
+    The legacy validator remains untouched for kubeadm. Talos validates its
+    control-plane/workers against the Talos template and its load balancers
+    independently against the Ubuntu template.
+    """
+    if config.cluster_type == ClusterType.KUBEADM:
+        disk = validate_template_disk_size(config, discovery)
+        return {config.proxmox.template_vm_id: disk}
+
+    role_configs: list[tuple[str, ClusterConfig, int]] = []
+    talos_nodes = config.model_copy(deep=True)
+    talos_nodes.nodes = [node for node in talos_nodes.nodes if node.role != "loadbalancer"]
+    role_configs.append(("Talos-Template", talos_nodes, config.proxmox.template_vm_id))
+
+    load_balancers = config.model_copy(deep=True)
+    load_balancers.proxmox.template_vm_id = config.effective_load_balancer_template_vm_id
+    load_balancers.nodes = [node for node in load_balancers.nodes if node.role == "loadbalancer"]
+    role_configs.append(("Ubuntu-LB-Template", load_balancers, config.effective_load_balancer_template_vm_id))
+
+    disks: dict[int, int] = {}
+    errors: list[str] = []
+    for label, role_config, template_id in role_configs:
+        try:
+            disks[template_id] = validate_template_disk_size(role_config, discovery)
+        except ValueError as exc:
+            errors.append(f"{label}: {exc}")
+    if errors:
+        raise ValueError(" ".join(errors))
+    return disks
+
+
 def validate_current_template_disk(db: Session, config: ClusterConfig) -> int:
     """Fetch trusted Proxmox metadata and validate before persisting IaC input."""
     payload = credential_payload(db, config.proxmox.credential_ref, CredentialKind.PROXMOX)
@@ -144,11 +177,12 @@ def validate_current_template_disk(db: Session, config: ClusterConfig) -> int:
         payload["api_token"],
         config.proxmox.verify_tls,
     ).discover()
-    return validate_template_disk_size(config, discovery)
+    return validate_template_disk_sizes(config, discovery)[config.proxmox.template_vm_id]
 
 
 def build_cluster_from_form(form: dict[str, str], cluster_id: str | None = None) -> ClusterConfig:
     cluster_id = cluster_id or str(uuid.uuid4())
+    cluster_type = ClusterType(form.get("cluster_type", ClusterType.KUBEADM.value))
     network = ipaddress.ip_network(form["network_cidr"], strict=True)
     role_specs = [
         ("loadbalancer", "lb", int(form["lb_count"]), form["lb_ip_start"], int(form["lb_vm_id_start"]), int(form["lb_cores"]), int(form["lb_memory"]), int(form["lb_disk"])),
@@ -168,16 +202,44 @@ def build_cluster_from_form(form: dict[str, str], cluster_id: str | None = None)
                 "memory_mb": memory,
                 "disk_gb": disk,
             })
-    public_key = form["ssh_public_key"].strip()
+    ssh = None
+    load_balancer_ssh = None
+    talos = None
+    if cluster_type == ClusterType.KUBEADM:
+        ssh = {
+            "user": form["ssh_user"].strip(),
+            "port": 22,
+            "public_key": form["ssh_public_key"].strip(),
+            "credential_ref": form["ssh_credential"],
+        }
+    else:
+        load_balancer_ssh = {
+            "user": form["lb_ssh_user"].strip(),
+            "port": 22,
+            "public_key": form["lb_ssh_public_key"].strip(),
+            "credential_ref": form["lb_ssh_credential"],
+        }
+        talos = {
+            "version": form["talos_version"].strip(),
+            "install_disk": form["talos_install_disk"].strip(),
+            "network_interface": form.get("talos_network_interface", "eth0").strip(),
+            "template_platform": "nocloud",
+        }
     return ClusterConfig.model_validate({
         "schema_version": 1,
         "id": cluster_id,
         "name": form["name"].strip(),
+        "cluster_type": cluster_type,
         "proxmox": {
             "endpoint": form["proxmox_endpoint"].strip(),
             "node": form["proxmox_node"].strip(),
             "datastore": form["datastore"].strip(),
             "template_vm_id": int(form["template_vm_id"]),
+            "load_balancer_template_vm_id": (
+                int(form["load_balancer_template_vm_id"])
+                if cluster_type == ClusterType.TALOS
+                else None
+            ),
             "bridge": form["bridge"].strip(),
             "vlan_id": int(form["vlan_id"]) if form.get("vlan_id", "").strip() else None,
             "verify_tls": form.get("verify_tls") == "on",
@@ -190,12 +252,9 @@ def build_cluster_from_form(form: dict[str, str], cluster_id: str | None = None)
             "dns_servers": [item.strip() for item in form["dns_servers"].split(",") if item.strip()],
             "api_vip": form["api_vip"],
         },
-        "ssh": {
-            "user": form["ssh_user"].strip(),
-            "port": 22,
-            "public_key": public_key,
-            "credential_ref": form["ssh_credential"],
-        },
+        "ssh": ssh,
+        "load_balancer_ssh": load_balancer_ssh,
+        "talos": talos,
         "kubernetes": {
             "version": form["kubernetes_version"].strip(),
             "api_port": 6443,
@@ -233,13 +292,19 @@ def save_cluster(db: Session, config: ClusterConfig, data_root: Path, source_roo
         cluster = Cluster(id=config.id, name=config.name, config=public, config_hash=digest)
         db.add(cluster)
     else:
-        configuration_changed = cluster.config_hash != digest
-        if configuration_changed and not cluster.applied_vm_ids:
+        # Defaults added in newer releases must not turn a semantically
+        # unchanged legacy JSON document into a runtime-invalidating edit.
+        # Keep the original JSON and hash until the user changes a real value.
+        existing_public = ClusterConfig.model_validate(cluster.config).public_dict()
+        configuration_changed = existing_public != public
+        if not configuration_changed:
+            digest = cluster.config_hash
+        if configuration_changed and cluster.applied_hash and not cluster.applied_vm_ids:
             cluster.applied_vm_ids = [int(node["vm_id"]) for node in cluster.config.get("nodes", [])]
         cluster.name = config.name
-        cluster.config = public
-        cluster.config_hash = digest
         if configuration_changed:
+            cluster.config = public
+            cluster.config_hash = digest
             cluster.status = ClusterStatus.DRAFT
             cluster.planned_hash = None
             cluster.destroy_planned_hash = None
