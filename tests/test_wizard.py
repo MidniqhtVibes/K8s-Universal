@@ -4,7 +4,7 @@ from pathlib import Path
 def test_load_balancer_defaults_are_sized_for_keepalived_and_haproxy():
     wizard = (Path(__file__).parents[1] / "app/templates/wizard.html").read_text(encoding="utf-8")
     assert 'name="lb_memory" value="{{ values.get(\'lb_memory\',\'2048\') }}"' in wizard
-    assert 'name="lb_disk" value="{{ values.get(\'lb_disk\',\'30\') }}"' in wizard
+    assert 'name="lb_disk" min="8" value="{{ values.get(\'lb_disk\',\'30\') }}"' in wizard
 
 
 def test_template_vm_id_comes_from_input_or_proxmox_discovery():
@@ -16,6 +16,23 @@ def test_template_vm_id_comes_from_input_or_proxmox_discovery():
     assert "values.get('template_vm_id','9000')" not in wizard
     assert "proxmoxTemplates.length === 1" in javascript
     assert "templateVmId.value = proxmoxTemplates[0].vmid" in javascript
+
+
+def test_template_disk_minimum_is_visible_and_drives_all_role_inputs():
+    project = Path(__file__).parents[1]
+    wizard = (project / "app/templates/wizard.html").read_text(encoding="utf-8")
+    javascript = (project / "app/static/wizard.js").read_text(encoding="utf-8")
+
+    assert 'id="template-disk-value"' in wizard
+    assert 'id="template-disk-message"' in wizard
+    for field in ("lb_disk", "cp_disk", "worker_disk"):
+        assert f'name="{field}" min="8"' in wizard
+        assert f"document.querySelector(`[name=\"${{name}}\"]`)" in javascript
+    assert "selected.template_disk_gb" in javascript
+    assert "input.min = String(effectiveMinimum)" in javascript
+    assert "templateVmId.setCustomValidity" in javascript
+    assert "Die Template-Disk ist über die Proxmox-API nicht verfügbar." in javascript
+    assert "requestSequence !== discoverySequence" in javascript
 
 
 def test_proxmox_connection_is_credential_owned_and_discovery_is_node_scoped():

@@ -85,6 +85,12 @@ Danach mit Benutzer `admin` und `INITIAL_ADMIN_PASSWORD` anmelden. Das initiale 
 
 Nach einer Änderung der Clusterkonfiguration gelten vorhandene Kubeconfig und Laufzeitstatus nicht mehr als aktuell. Der Builder verlangt dann einen neuen Terraform-Plan und wendet exakt dieses geprüfte Planartefakt an. SSH-Port `22`, Kubernetes-API-Port `6443` und Kubernetes `v1.36` sind die derzeit vollständig unterstützten Werte.
 
+Die Discovery zeigt für das ausgewählte QEMU-Template auch dessen Disk-Größe.
+Load-Balancer-, Control-Plane- und Worker-Disks dürfen nicht kleiner sein. Der
+Builder prüft diese Regel beim Speichern sowie erneut vor Terraform-Plan und
+-Apply gegen die aktuellen Proxmox-Daten. Fehlt die Größenangabe, wird der
+Vorgang mit einer verständlichen Fehlermeldung gestoppt.
+
 ### Optionale Container-Registry
 
 Im Wizard kann unter **Container Registry** genau ein privater Registry-Endpunkt
@@ -128,6 +134,13 @@ Cluster, manuell reservierte IPs/CIDRs und bei ausgewähltem Proxmox-Credential
 bereits vorhandene VM-IDs werden übersprungen. Doppelte Vergaben zwischen vom
 Builder verwalteten Clustern werden zusätzlich beim Speichern abgewiesen.
 
+Beim ersten Start sind diese Werte nur sichtbare technische **System Defaults**;
+ein Lesezugriff legt keinen Datenbankeintrag an. Erst **Standard-Konfiguration
+erstellen** speichert benutzerdefinierte Startwerte für neue Wizard-Aufrufe.
+Die Konfiguration bleibt optional, kann zurückgesetzt werden und enthält keine
+Tokens oder privaten Schlüssel. Bestehende Cluster werden durch Änderungen an
+den Standards nicht verändert.
+
 Vor dem Terraform-Plan und erneut unmittelbar vor dessen Anwendung prüft der
 Worker die Zielumgebung direkt über die Proxmox-API. Fremde Ressourcen mit
 einer angeforderten VM-ID, einem erzeugten VM-Namen oder einer bereits in
@@ -158,6 +171,13 @@ Der vorgesehene Ablauf lautet:
 5. Optional mit **Aus Cluster entfernen** die deklarierten Ressourcen wieder löschen und danach den Builder-Eintrag entfernen.
 
 Jedes Speichern und jeder Lauf erzeugt eine unveränderliche Revision. Frühere Revisionen können als neuer Entwurf wiederhergestellt werden. Unverschlüsselte Ressourcen vom Typ `Secret` sind gesperrt; dafür ist später eine Integration mit SOPS oder Sealed Secrets vorgesehen.
+
+**Alte Revisionen aufräumen** behält die konfigurierte Anzahl neuester
+Revisionen sowie jede ältere Revision, die noch in einer Job-Historie verwendet
+wird. Die Rückmeldung unterscheidet gelöschte, per Retention behaltene und per
+Jobreferenz geschützte Revisionen. Entsprechend entfernt **Alte Historie
+aufräumen** auf der Clusterseite nur abgeschlossene Jobs außerhalb des
+konfigurierten Limits; laufende und wartende Jobs bleiben immer erhalten.
 
 ## Proxmox-Berechtigungen
 

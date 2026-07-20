@@ -145,13 +145,29 @@
   </div>
 </div>
 
+{% if job_cleanup_result %}
+<div class="alert {% if job_cleanup_result.deleted %}alert-success{% else %}alert-info{% endif %}" role="status">
+  <span class="alert-icon">{{ ui.icon('check' if job_cleanup_result.deleted else 'info') }}</span>
+  <div>
+    {% if job_cleanup_result.deleted %}
+    <strong>{{ job_cleanup_result.deleted }} alte Jobs wurden entfernt</strong>
+    <p>Die neuesten {{ job_cleanup_result.kept }} abgeschlossenen Jobs wurden behalten.{% if job_cleanup_result.active_ignored %} {{ job_cleanup_result.active_ignored }} laufende oder wartende Jobs blieben unberührt.{% endif %}</p>
+    {% else %}
+    <strong>Keine alten Jobs entfernt</strong>
+    <p>{{ job_cleanup_result.kept }} abgeschlossene Jobs sind vorhanden; das Retention-Limit liegt bei {{ job_cleanup_result.retention_limit }}.{% if job_cleanup_result.active_ignored %} {{ job_cleanup_result.active_ignored }} laufende oder wartende Jobs wurden ignoriert.{% endif %}</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <section class="card jobs-card">
   <div class="card-header">
     <div>
       <p class="eyebrow">Aktivität</p>
       <h2>Letzte Jobs</h2>
+      <p class="page-subtitle">Die neuesten {{ job_retention_keep }} abgeschlossenen Jobs bleiben erhalten. Laufende und wartende Jobs werden nie gelöscht.</p>
     </div>
-    <form method="post" action="/clusters/{{ cluster.id }}/prune-jobs" onsubmit="return confirm('Abgeschlossene alte Jobs aufräumen?')"><button class="button secondary">{{ ui.icon('trash') }}<span>Historie aufräumen</span></button></form>
+    <form method="post" action="/clusters/{{ cluster.id }}/prune-jobs" onsubmit="return confirm('Alte abgeschlossene Jobs außerhalb der Retention-Grenze aufräumen?')"><button class="button secondary">{{ ui.icon('trash') }}<span>Alte Historie aufräumen</span></button></form>
   </div>
 
   <div class="job-list">

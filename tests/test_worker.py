@@ -20,7 +20,7 @@ def test_proxmox_preflight_uses_configured_template_vm_id(monkeypatch, tmp_path)
         def discover(self):
             return {
                 "nodes": [{"node": "pve"}],
-                "vms": [{"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve"}],
+                "vms": [{"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve", "template_disk_gb": 20}],
                 "details": {
                     "pve": {
                         "storages": [{"storage": "local-lvm"}],
@@ -182,7 +182,7 @@ def test_proxmox_preflight_only_exempts_vm_ids_owned_by_terraform_state(monkeypa
             return {
                 "nodes": [{"node": "pve"}],
                 "vms": [
-                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve"},
+                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve", "template_disk_gb": 20},
                     {"vmid": config.nodes[0].vm_id, "template": 0, "type": "qemu", "node": "pve"},
                     {"vmid": config.nodes[1].vm_id, "template": 0, "type": "qemu", "node": "pve"},
                 ],
@@ -240,7 +240,7 @@ def test_proxmox_preflight_rejects_foreign_vm_names(monkeypatch, tmp_path):
             return {
                 "nodes": [{"node": "pve"}],
                 "vms": [
-                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve"},
+                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve", "template_disk_gb": 20},
                     {"vmid": 777, "name": "test-cluster-lb-01", "template": 0, "type": "qemu", "node": "pve"},
                 ],
                 "details": {"pve": {"storages": [{"storage": "local-lvm"}], "bridges": [{"iface": "vmbr0"}]}},
@@ -266,7 +266,7 @@ def test_proxmox_preflight_rejects_foreign_static_ips(monkeypatch, tmp_path):
             return {
                 "nodes": [{"node": "pve"}],
                 "vms": [
-                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve"},
+                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve", "template_disk_gb": 20},
                     {"vmid": 778, "name": "legacy-vm", "template": 0, "type": "qemu", "node": "pve"},
                 ],
                 "details": {"pve": {"storages": [{"storage": "local-lvm"}], "bridges": [{"iface": "vmbr0"}]}},
@@ -304,7 +304,7 @@ def test_proxmox_preflight_allows_state_owned_names_and_ips(monkeypatch, tmp_pat
             return {
                 "nodes": [{"node": "pve"}],
                 "vms": [
-                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve"},
+                    {"vmid": config.proxmox.template_vm_id, "template": 1, "type": "qemu", "node": "pve", "template_disk_gb": 20},
                     {"vmid": config.nodes[0].vm_id, "name": "test-cluster-lb-01", "template": 0, "type": "qemu", "node": "pve"},
                 ],
                 "details": {"pve": {"storages": [{"storage": "local-lvm"}], "bridges": [{"iface": "vmbr0"}]}},

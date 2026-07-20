@@ -1580,6 +1580,35 @@ label,
   font-weight: 500;
 }
 
+.template-disk-summary {
+  display: flex;
+  min-height: 74px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgb(10 25 41 / 55%);
+  padding: 12px 14px;
+}
+
+.template-disk-summary > span {
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.template-disk-summary > strong {
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.template-disk-summary > small {
+  line-height: 1.4;
+}
+
 .field-error {
   color: #ffabb4;
   font-size: .68rem;

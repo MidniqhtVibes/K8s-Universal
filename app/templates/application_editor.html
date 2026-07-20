@@ -118,14 +118,30 @@
   </aside>
 </div>
 
+{% if revision_cleanup_result %}
+<div class="alert {% if revision_cleanup_result.deleted %}alert-success{% else %}alert-info{% endif %}" role="status">
+  <span class="alert-icon">{{ ui.icon('check' if revision_cleanup_result.deleted else 'info') }}</span>
+  <div>
+    {% if revision_cleanup_result.deleted %}
+    <strong>{{ revision_cleanup_result.deleted }} alte Revisionen wurden entfernt</strong>
+    <p>{{ revision_cleanup_result.kept_by_retention }} aktuelle Revisionen wurden durch die Retention-Regel behalten.{% if revision_cleanup_result.kept_by_reference %} {{ revision_cleanup_result.kept_by_reference }} ältere Revisionen werden weiterhin von Jobs verwendet und blieben erhalten.{% endif %}</p>
+    {% else %}
+    <strong>Keine Revisionen entfernt</strong>
+    <p>{{ revision_cleanup_result.kept_by_retention }} aktuelle Revisionen wurden durch die Retention-Regel behalten.{% if revision_cleanup_result.kept_by_reference %} {{ revision_cleanup_result.kept_by_reference }} ältere Revisionen sind zusätzlich durch Jobreferenzen geschützt.{% endif %}</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <section class="card revision-panel" aria-labelledby="revisions-heading">
   <div class="card-header">
     <div>
       <span class="eyebrow">Versionsverlauf</span>
       <h2 id="revisions-heading">Revisionen</h2>
+      <p class="page-subtitle">Die neuesten {{ manifest_revision_retention_keep }} Revisionen sowie weiterhin von Jobs verwendete Revisionen bleiben erhalten.</p>
     </div>
-    <form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/revisions/prune" onsubmit="return confirm('Alte nicht referenzierte Revisionen aufräumen?')">
-      <button type="submit" class="button secondary">{{ ui.icon('trash') }} Revisionen aufräumen</button>
+    <form method="post" action="/clusters/{{ cluster.id }}/applications/{{ bundle.id }}/revisions/prune" onsubmit="return confirm('Alte Revisionen außerhalb der Retention-Grenze aufräumen? Referenzierte Revisionen bleiben erhalten.')">
+      <button type="submit" class="button secondary">{{ ui.icon('trash') }} Alte Revisionen aufräumen</button>
     </form>
   </div>
 

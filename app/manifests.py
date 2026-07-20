@@ -5,7 +5,7 @@ import yaml
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import ApplicationBundle, ManifestRevision
+from .models import ApplicationBundle, Job, ManifestRevision
 
 
 PATH_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._/-]*\.ya?ml$")
@@ -366,6 +366,37 @@ def create_revision(db: Session, bundle: ApplicationBundle, message: str) -> Man
     db.add(revision)
     db.flush()
     return revision
+
+
+def cleanup_manifest_revisions(
+    db: Session,
+    bundle: ApplicationBundle,
+    retention_keep: int,
+) -> dict[str, int]:
+    """Remove old revisions while retaining recent and job-referenced snapshots."""
+    revisions = db.scalars(
+        select(ManifestRevision)
+        .where(ManifestRevision.bundle_id == bundle.id)
+        .order_by(ManifestRevision.created_at.desc(), ManifestRevision.version.desc())
+    ).all()
+    retention_ids = {revision.id for revision in revisions[:retention_keep]}
+    revision_ids = {revision.id for revision in revisions}
+    referenced_ids = {
+        str(payload.get("revision_id"))
+        for payload in db.scalars(select(Job.payload)).all()
+        if isinstance(payload, dict) and payload.get("revision_id")
+    } & revision_ids
+    reference_only_ids = referenced_ids - retention_ids
+    delete_ids = revision_ids - retention_ids - reference_only_ids
+    for revision in revisions:
+        if revision.id in delete_ids:
+            db.delete(revision)
+    return {
+        "deleted": len(delete_ids),
+        "kept_by_retention": len(retention_ids),
+        "kept_by_reference": len(reference_only_ids),
+        "retention_limit": retention_keep,
+    }
 
 
 def render_snapshot(snapshot: dict) -> tuple[str, list[dict]]:
