@@ -102,6 +102,44 @@ The helper downloads the exact supported vanilla Talos NoCloud image, verifies i
 
 Talos clusters therefore select two different template IDs in the wizard: the Talos template for control-plane/workers and the Ubuntu template for the load balancers.
 
+## Optional: Create the Orchestrator VM on Proxmox
+
+`proxmox/create-orchestrator-vm.sh` creates a separate, normal Ubuntu VM directly on a Proxmox node. It verifies the official Ubuntu checksum signature, installs Docker Engine and the Docker Compose v2 plugin from Docker's official APT repository, resolves the selected repository ref to one commit, and copies that commit's `compose.yaml` and `.env.example` into the VM. It does not create `.env`, insert placeholder secrets, or start the application.
+
+Download and inspect the script on the Proxmox host before running it:
+
+```bash
+wget --https-only -O /root/create-orchestrator-vm.sh \
+  https://raw.githubusercontent.com/MidniqhtVibes/K8S-Universal/main/proxmox/create-orchestrator-vm.sh
+chmod 700 /root/create-orchestrator-vm.sh
+bash /root/create-orchestrator-vm.sh --help
+```
+
+Create the VM. `9300` is only an example and must be free across the Proxmox cluster:
+
+```bash
+bash /root/create-orchestrator-vm.sh \
+  --vm-id 9300 \
+  --storage local-lvm \
+  --bridge vmbr0 \
+  --ssh-key-file /root/.ssh/id_ed25519.pub \
+  --install-dependencies
+```
+
+The defaults are Ubuntu 24.04, DHCP, 4 vCPUs, 8 GiB RAM, and a 40 GiB disk. An explicit public-key file is required; Proxmox's root `authorized_keys` is deliberately never copied automatically. A release tag or commit can be selected with `--repository-ref`; both repository files are then downloaded from the single resolved commit. Before reporting success, the script waits for the QEMU Guest Agent and verifies Cloud-Init, the Docker daemon, Compose v2, both files, and their ownership inside the guest.
+
+After the first boot, log in as `ubuntu`. The only remaining deployment steps are:
+
+```bash
+cd /home/ubuntu/k8s-universal
+cp .env.example .env
+chmod 600 .env
+nano .env
+docker compose up -d
+```
+
+Replace every password placeholder, select the intended `BUILDER_VERSION`, and set `BUILDER_BIND_ADDRESS` to an appropriate private address before starting Compose. The default `127.0.0.1` is not reachable from another machine. Membership in the Docker group is effectively root-level access, so only a trusted administrator key should be supplied. Without a TLS reverse proxy, expose the application only inside a trusted LAN or VPN.
+
 ## Setup with Prebuilt Container Images
 
 For normal operation, the images are no longer built locally.

@@ -98,6 +98,64 @@ nicht einfach als `/dev/vda` verwendet werden. Weitere Parameter zeigt
 Ein Talos-Cluster benoetigt weiterhin das getrennte Ubuntu-Template aus dem
 vorigen Abschnitt fuer seine SSH-verwalteten Load Balancer.
 
+## Optionale Orchestrator-VM auf Proxmox
+
+`proxmox/create-orchestrator-vm.sh` erzeugt direkt auf einem Proxmox-Node eine
+normale Ubuntu-VM fuer die Anwendung. Es prueft die Signatur der offiziellen
+Ubuntu-Pruefsummen, installiert Docker Engine und das Compose-v2-Plugin aus
+dem offiziellen Docker-APT-Repository, loest den Git-Ref einmalig auf eine
+Commit-SHA auf und legt deren `compose.yaml` sowie `.env.example` unter
+`/home/ubuntu/k8s-universal` ab. Eine `.env` mit unsicheren Platzhalterwerten
+wird ebenso wenig erzeugt wie die Anwendung automatisch gestartet wird.
+
+Das Skript kann auf dem Proxmox-Host mit `wget` heruntergeladen und vor der
+Ausfuehrung geprueft werden:
+
+```bash
+wget --https-only -O /root/create-orchestrator-vm.sh \
+  https://raw.githubusercontent.com/MidniqhtVibes/K8S-Universal/main/proxmox/create-orchestrator-vm.sh
+chmod 700 /root/create-orchestrator-vm.sh
+bash /root/create-orchestrator-vm.sh --help
+```
+
+Anschliessend wird eine clusterweit freie Ziel-ID uebergeben. `9300` ist nur
+ein Beispiel:
+
+```bash
+bash /root/create-orchestrator-vm.sh \
+  --vm-id 9300 \
+  --storage local-lvm \
+  --bridge vmbr0 \
+  --ssh-key-file /root/.ssh/id_ed25519.pub \
+  --install-dependencies
+```
+
+Ohne weitere Angaben verwendet die VM Ubuntu 24.04, DHCP, vier vCPUs, 8 GiB
+RAM und 40 GiB Disk. Eine explizite Public-Key-Datei ist Pflicht;
+`authorized_keys` von Proxmox-root wird bewusst niemals automatisch in die VM
+kopiert. Fuer reproduzierbare Installationen kann `--repository-ref` auf einen
+Release-Tag oder Commit gesetzt werden. Vor der Erfolgsmeldung wartet das
+Skript auf den QEMU Guest Agent und prueft im Gast Cloud-Init, Docker-Daemon,
+Compose v2, beide Projektdateien und deren Eigentuemerschaft.
+
+Nach dem ersten Boot sind in der neuen VM nur noch diese Schritte noetig:
+
+```bash
+cd /home/ubuntu/k8s-universal
+cp .env.example .env
+chmod 600 .env
+nano .env
+docker compose up -d
+```
+
+Vor dem Start muessen alle Passwort-Platzhalter und die gewuenschte
+`BUILDER_VERSION` gesetzt werden. Fuer Zugriff aus dem internen Netz ist
+`BUILDER_BIND_ADDRESS` bewusst auf eine geeignete private Adresse zu setzen;
+der Repository-Standard `127.0.0.1` ist nur lokal in der VM erreichbar. Die
+Mitgliedschaft in der Docker-Gruppe entspricht praktisch root-Rechten, daher
+darf nur ein vertrauenswuerdiger Admin-Key verwendet werden. Ohne TLS-Reverse-
+Proxy darf die Anwendung nur in einem vertrauenswuerdigen LAN oder VPN liegen.
+
 ## Installation
 
 ```bash
