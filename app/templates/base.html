@@ -1,13 +1,39 @@
 {% import "_macros.html" as ui %}
 <!doctype html>
-<html lang="de">
+<html lang="de" data-theme="standard">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#07111f">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#07111f" id="theme-color">
   <title>K8S-Universal</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/app.css">
+  <script>
+    (() => {
+      const themes = Object.freeze({
+        standard: Object.freeze({ label: 'Standard', colorScheme: 'dark', themeColor: '#07111f' }),
+        'github-dark': Object.freeze({ label: 'Dark', colorScheme: 'dark', themeColor: '#010409' }),
+        'hello-kitty': Object.freeze({ label: 'Hello Kitty', colorScheme: 'light', themeColor: '#f3cfdd' }),
+        light: Object.freeze({ label: 'Hell', colorScheme: 'light', themeColor: '#f6f8fa' })
+      });
+      window.K8S_THEME_CONFIG = themes;
+      let selectedTheme = 'standard';
+      try {
+        const storedTheme = localStorage.getItem('k8s-universal-theme');
+        if (storedTheme && Object.prototype.hasOwnProperty.call(themes, storedTheme)) {
+          selectedTheme = storedTheme;
+        }
+      } catch (_) {
+        // Das Standard-Theme bleibt auch ohne Local-Storage-Zugriff nutzbar.
+      }
+      const theme = themes[selectedTheme];
+      document.documentElement.dataset.theme = selectedTheme;
+      document.documentElement.style.colorScheme = theme.colorScheme;
+      document.querySelector('meta[name="theme-color"]').setAttribute('content', theme.themeColor);
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/app.css?v={{ app_css_version }}">
+  <script defer src="/static/themes.js?v={{ themes_js_version }}"></script>
 </head>
 <body class="{% if not request.session.get('user_id') %}is-anonymous{% endif %}">
   {% if request.session.get('user_id') %}
@@ -31,6 +57,7 @@
     <symbol id="icon-app" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
     <symbol id="icon-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></symbol>
     <symbol id="icon-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8m-3 3 2 2m-5 1 2 2"/></symbol>
+    <symbol id="icon-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 0-4H12a2 2 0 0 1 0-4h3a6 6 0 0 0 6-6c0-4.4-4-8-9-8Z"/><circle cx="7.5" cy="10" r="1"/><circle cx="10" cy="6.8" r="1"/><circle cx="14.2" cy="6.8" r="1"/><circle cx="17" cy="10" r="1"/></symbol>
     <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
     <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
@@ -106,6 +133,10 @@
 
       <div class="sidebar-bottom">
         <nav aria-label="Verwaltung">
+          <a href="/themes" class="{% if request.url.path == '/themes' %}active{% endif %}">
+            <span class="nav-icon">{{ ui.icon('palette') }}</span>
+            <span class="nav-text">Themes</span>
+          </a>
           <a href="/credentials" class="{% if request.url.path == '/credentials' %}active{% endif %}">
             <span class="nav-icon">{{ ui.icon('key') }}</span>
             <span class="nav-text">Credentials</span>

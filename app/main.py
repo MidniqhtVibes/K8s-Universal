@@ -32,6 +32,8 @@ from .terraform_state import managed_vm_ids
 settings = get_settings()
 APP_ROOT = Path(__file__).parent
 STATIC_ROOT = APP_ROOT / "static"
+APP_CSS_VERSION = sha256((STATIC_ROOT / "app.css").read_bytes()).hexdigest()[:12]
+THEMES_JS_VERSION = sha256((STATIC_ROOT / "themes.js").read_bytes()).hexdigest()[:12]
 WIZARD_JS_VERSION = sha256((STATIC_ROOT / "wizard.js").read_bytes()).hexdigest()[:12]
 
 
@@ -62,6 +64,8 @@ templates = Jinja2Templates(
     context_processors=[sidebar_context],
 )
 templates.env.globals["wizard_js_version"] = WIZARD_JS_VERSION
+templates.env.globals["app_css_version"] = APP_CSS_VERSION
+templates.env.globals["themes_js_version"] = THEMES_JS_VERSION
 
 
 @asynccontextmanager
@@ -138,6 +142,11 @@ def credentials_page(request: Request, _: User = Depends(current_user), db: Sess
     active_clusters = db.scalars(select(Cluster).where(Cluster.status != ClusterStatus.DESTROYED)).all()
     used_credential_ids = credential_ids_used_by(active_clusters)
     return templates.TemplateResponse(request, "credentials.html", {"credentials": credentials, "used_credential_ids": used_credential_ids})
+
+
+@app.get("/themes", response_class=HTMLResponse)
+def themes_page(request: Request, _: User = Depends(current_user)):
+    return templates.TemplateResponse(request, "themes.html", {})
 
 
 def credential_ids_used_by(clusters: list[Cluster]) -> set[str]:

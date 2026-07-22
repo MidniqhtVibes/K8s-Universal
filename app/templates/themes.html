@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% import "_macros.html" as ui %}
+
+{% block breadcrumb %}Themes{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div class="page-heading">
+    <p class="eyebrow">Darstellung</p>
+    <h1>Themes</h1>
+    <p class="page-subtitle">Wähle das Erscheinungsbild, das am besten zu deiner Arbeitsumgebung passt.</p>
+  </div>
+  <div class="page-actions">
+    <span class="badge ready">Aktiv: <strong class="theme-current-name">Standard</strong></span>
+  </div>
+</header>
+
+<div class="alert alert-info theme-notice">
+  <span class="alert-icon">{{ ui.icon('palette') }}</span>
+  <div>
+    <strong>Sofortige Vorschau</strong>
+    <p>Die Auswahl gilt direkt für die gesamte Oberfläche und bleibt in diesem Browser gespeichert. Offene Tabs übernehmen Änderungen automatisch.</p>
+  </div>
+</div>
+
+<section class="card theme-selector" aria-labelledby="theme-selector-heading">
+  <div class="card-header">
+    <div class="section-heading">
+      <span class="section-icon">{{ ui.icon('palette') }}</span>
+      <div>
+        <h2 id="theme-selector-heading">Farbschema auswählen</h2>
+        <p class="page-subtitle">Struktur, Felder und Bedienabläufe bleiben in allen Varianten identisch.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="theme-grid" role="group" aria-label="Verfügbare Themes">
+    <button class="theme-card" type="button" data-theme-option="standard" aria-pressed="false">
+      <span class="theme-preview theme-preview-standard" aria-hidden="true">
+        <span class="theme-preview-sidebar"></span>
+        <span class="theme-preview-content">
+          <span class="theme-preview-title"></span>
+          <span class="theme-preview-panels"><i></i><i></i><i></i></span>
+          <span class="theme-preview-button"></span>
+        </span>
+      </span>
+      <span class="theme-card-copy">
+        <span class="theme-card-heading"><strong>Standard</strong><span class="theme-card-check" aria-hidden="true">{{ ui.icon('check') }} Aktiv</span></span>
+        <span>Das bisherige dunkle Blaugrün – vertraut, ruhig und technisch.</span>
+      </span>
+      <span class="theme-swatches" aria-hidden="true">
+        <i class="theme-swatch theme-swatch-bg"></i><i class="theme-swatch theme-swatch-accent"></i><i class="theme-swatch theme-swatch-lb"></i><i class="theme-swatch theme-swatch-worker"></i>
+      </span>
+    </button>
+
+    <button class="theme-card" type="button" data-theme-option="github-dark" aria-pressed="false">
+      <span class="theme-preview theme-preview-github-dark" aria-hidden="true">
+        <span class="theme-preview-sidebar"></span>
+        <span class="theme-preview-content">
+          <span class="theme-preview-title"></span>
+          <span class="theme-preview-panels"><i></i><i></i><i></i></span>
+          <span class="theme-preview-button"></span>
+        </span>
+      </span>
+      <span class="theme-card-copy">
+        <span class="theme-card-heading"><strong>Dark</strong><span class="theme-card-check" aria-hidden="true">{{ ui.icon('check') }} Aktiv</span></span>
+        <span>Fast schwarzes Anthrazit mit klaren Blau- und Grünakzenten.</span>
+      </span>
+      <span class="theme-swatches" aria-hidden="true">
+        <i class="theme-swatch theme-swatch-bg"></i><i class="theme-swatch theme-swatch-accent"></i><i class="theme-swatch theme-swatch-lb"></i><i class="theme-swatch theme-swatch-worker"></i>
+      </span>
+    </button>
+
+    <button class="theme-card" type="button" data-theme-option="hello-kitty" aria-pressed="false">
+      <span class="theme-preview theme-preview-hello-kitty" aria-hidden="true">
+        <span class="theme-preview-sidebar"></span>
+        <span class="theme-preview-content">
+          <span class="theme-preview-title"></span>
+          <span class="theme-preview-panels"><i></i><i></i><i></i></span>
+          <span class="theme-preview-button"></span>
+        </span>
+      </span>
+      <span class="theme-card-copy">
+        <span class="theme-card-heading"><strong>Hello Kitty</strong><span class="theme-card-check" aria-hidden="true">{{ ui.icon('check') }} Aktiv</span></span>
+        <span>Satteres Rosé, kräftige Beerenakzente und dezente Herzen – verspielt, aber angenehm gedämpft.</span>
+      </span>
+      <span class="theme-swatches" aria-hidden="true">
+        <i class="theme-swatch theme-swatch-bg"></i><i class="theme-swatch theme-swatch-accent"></i><i class="theme-swatch theme-swatch-lb"></i><i class="theme-swatch theme-swatch-worker"></i>
+      </span>
+    </button>
+
+    <button class="theme-card" type="button" data-theme-option="light" aria-pressed="false">
+      <span class="theme-preview theme-preview-light" aria-hidden="true">
+        <span class="theme-preview-sidebar"></span>
+        <span class="theme-preview-content">
+          <span class="theme-preview-title"></span>
+          <span class="theme-preview-panels"><i></i><i></i><i></i></span>
+          <span class="theme-preview-button"></span>
+        </span>
+      </span>
+      <span class="theme-card-copy">
+        <span class="theme-card-heading"><strong>Hell</strong><span class="theme-card-check" aria-hidden="true">{{ ui.icon('check') }} Aktiv</span></span>
+        <span>Eine helle, weiße Arbeitsfläche mit kühlen Konturen und frischen Akzenten.</span>
+      </span>
+      <span class="theme-swatches" aria-hidden="true">
+        <i class="theme-swatch theme-swatch-bg"></i><i class="theme-swatch theme-swatch-accent"></i><i class="theme-swatch theme-swatch-lb"></i><i class="theme-swatch theme-swatch-worker"></i>
+      </span>
+    </button>
+  </div>
+
+  <p class="theme-live-status" data-theme-live aria-live="polite"></p>
+</section>
+{% endblock %}
