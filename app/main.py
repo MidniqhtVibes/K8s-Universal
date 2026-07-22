@@ -1,6 +1,7 @@
 import asyncio
 import shutil
 from contextlib import asynccontextmanager
+from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -29,6 +30,9 @@ from .terraform_state import managed_vm_ids
 
 
 settings = get_settings()
+APP_ROOT = Path(__file__).parent
+STATIC_ROOT = APP_ROOT / "static"
+WIZARD_JS_VERSION = sha256((STATIC_ROOT / "wizard.js").read_bytes()).hexdigest()[:12]
 
 
 def cluster_runtime_is_current(cluster: Cluster) -> bool:
@@ -54,9 +58,10 @@ def sidebar_context(request: Request) -> dict:
 
 
 templates = Jinja2Templates(
-    directory=Path(__file__).parent / "templates",
+    directory=APP_ROOT / "templates",
     context_processors=[sidebar_context],
 )
+templates.env.globals["wizard_js_version"] = WIZARD_JS_VERSION
 
 
 @asynccontextmanager
@@ -76,7 +81,7 @@ app.add_middleware(
     same_site="strict",
     max_age=8 * 60 * 60,
 )
-app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
 
 def current_user(request: Request, db: Session = Depends(get_db)) -> User:

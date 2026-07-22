@@ -1,4 +1,9 @@
+from hashlib import sha256
 from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from app.main import WIZARD_JS_VERSION, app
 
 
 def test_load_balancer_defaults_are_sized_for_keepalived_and_haproxy():
@@ -73,6 +78,26 @@ def test_registry_fields_are_optional_and_provisioner_independent():
     assert "registryEndpoint.disabled = !enabled" in javascript
     assert "registryEndpoint.required = enabled" in javascript
     assert "registryUseHttp.disabled = !enabled" in javascript
+
+
+def test_wizard_javascript_url_uses_its_content_hash():
+    project = Path(__file__).parents[1]
+    javascript = project / "app/static/wizard.js"
+    expected_version = sha256(javascript.read_bytes()).hexdigest()[:12]
+
+    assert WIZARD_JS_VERSION == expected_version
+
+    with TestClient(app) as client:
+        login = client.post(
+            "/login",
+            data={"username": "admin", "password": "test-admin-password"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 303
+        response = client.get("/clusters/new")
+
+    assert response.status_code == 200
+    assert f'/static/wizard.js?v={expected_version}' in response.text
 
 
 def test_registry_client_validation_and_http_warning_are_explicit():
