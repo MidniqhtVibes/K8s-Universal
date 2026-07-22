@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from .schemas import ClusterConfig
+from .schemas import ClusterConfig, ClusterType
 
 
 def config_hash(config: dict) -> str:
@@ -24,19 +24,23 @@ def render_cluster(config: ClusterConfig, destination: Path, source_root: Path) 
     public = config.public_dict()
     (destination / "cluster.yaml").write_text(yaml.safe_dump(public, sort_keys=False), encoding="utf-8")
 
+    provisioning_ssh = config.provisioning_ssh
     tfvars = {
+        "cluster_type": config.cluster_type.value,
         "proxmox_endpoint": config.proxmox.endpoint,
         "proxmox_insecure": not config.proxmox.verify_tls,
         "proxmox_node": config.proxmox.node,
         "template_vm_id": config.proxmox.template_vm_id,
+        "load_balancer_template_vm_id": config.effective_load_balancer_template_vm_id,
+        "talos_install_disk": config.talos.install_disk if config.talos else "/dev/sda",
         "datastore_id": config.proxmox.datastore,
         "network_bridge": config.proxmox.bridge,
         "vlan_id": config.proxmox.vlan_id,
         "gateway": str(config.network.gateway),
         "subnet_prefix": config.network.cidr.prefixlen,
         "dns_servers": [str(item) for item in config.network.dns_servers],
-        "ssh_user": config.ssh.user,
-        "ssh_public_key": config.ssh.public_key,
+        "ssh_user": provisioning_ssh.user,
+        "ssh_public_key": provisioning_ssh.public_key,
         "nodes": {
             node.name: {
                 **node.model_dump(mode="json"),
@@ -55,14 +59,15 @@ def render_cluster(config: ClusterConfig, destination: Path, source_root: Path) 
                 node.name: {"ansible_host": str(node.ip)}
                 for node in config.nodes
                 if node.role == role
+                and (config.cluster_type == ClusterType.KUBEADM or role == "loadbalancer")
             }
         }
     groups["k8s_cluster"] = {"children": {"control_plane": {}, "worker": {}}}
     inventory = {
         "all": {
             "vars": {
-                "ansible_user": config.ssh.user,
-                "ansible_port": config.ssh.port,
+                "ansible_user": provisioning_ssh.user,
+                "ansible_port": provisioning_ssh.port,
                 "ansible_ssh_private_key_file": "{{ lookup('env', 'CLUSTER_SSH_KEY_PATH') }}",
                 "ansible_become": True,
                 "ansible_ssh_common_args": "-o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new",
@@ -87,7 +92,7 @@ def render_cluster(config: ClusterConfig, destination: Path, source_root: Path) 
         "container_registry_endpoint": config.registry_endpoint or "",
         "container_registry_use_http": config.registry_use_http,
         "first_control_plane": control_planes[0].name,
-        "kube_user": config.ssh.user,
+        "kube_user": provisioning_ssh.user,
         "keepalived_interface": "{{ ansible_default_ipv4.interface }}",
         "keepalived_master": loadbalancers[0].name,
         "keepalived_virtual_router_id": _keepalived_virtual_router_id(config),

@@ -1545,6 +1545,62 @@ pre,
   gap: 10px;
 }
 
+.cluster-type-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 20px;
+  border: 0;
+  padding: 0;
+}
+
+.cluster-type-selector legend {
+  grid-column: 1 / -1;
+  margin-bottom: 2px;
+  color: var(--text);
+  font-size: .82rem;
+  font-weight: 800;
+}
+
+.cluster-type-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgb(10 25 41 / 55%);
+  padding: 14px;
+  cursor: pointer;
+}
+
+.cluster-type-option:has(input:checked) {
+  border-color: var(--accent);
+  background: rgb(16 185 129 / 10%);
+}
+
+.cluster-type-option input {
+  width: auto;
+  min-height: 0;
+}
+
+.cluster-type-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cluster-type-option small,
+.cluster-type-selector .field-hint {
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 500;
+}
+
+.cluster-type-selector .field-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2931,6 +2987,10 @@ hr {
 @media (max-width: 680px) {
   :root {
     --content-pad: 15px;
+  }
+
+  .cluster-type-selector {
+    grid-template-columns: 1fr;
   }
 
   .topbar {

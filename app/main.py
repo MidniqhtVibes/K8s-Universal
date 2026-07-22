@@ -23,6 +23,7 @@ from .models import AuditEvent, ApplicationBundle, Cluster, ClusterStatus, Crede
 from .kubectl_terminal import audit_safe_command, parse_kubectl_command
 from .proxmox import ProxmoxClient, ProxmoxError, split_token
 from .security import validate_ssh_keypair, verify_password
+from .schemas import ClusterConfig, ClusterType, SUPPORTED_TALOS_VERSIONS
 from .services import bind_proxmox_credential, bootstrap_database, build_cluster_from_form, cleanup_cluster_job_history, credential_payload, queue_job, save_cluster, store_credential, validate_current_template_disk
 from .terraform_state import managed_vm_ids
 
@@ -32,6 +33,16 @@ settings = get_settings()
 
 def cluster_runtime_is_current(cluster: Cluster) -> bool:
     return cluster.applied_hash is not None and cluster.applied_hash == cluster.config_hash
+
+
+def cluster_type_is_locked(cluster: Cluster) -> bool:
+    terraform_state = settings.data_root / "clusters" / cluster.id / "terraform" / "terraform.tfstate"
+    return bool(
+        cluster.applied_hash
+        or cluster.applied_vm_ids
+        or cluster.status == ClusterStatus.DESTROYED
+        or terraform_state.is_file()
+    )
 
 
 def sidebar_context(request: Request) -> dict:
@@ -127,11 +138,21 @@ def credentials_page(request: Request, _: User = Depends(current_user), db: Sess
 def credential_ids_used_by(clusters: list[Cluster]) -> set[str]:
     used: set[str] = set()
     for cluster in clusters:
-        for section in ("proxmox", "ssh"):
-            reference = cluster.config.get(section, {}).get("credential_ref")
+        for section in ("proxmox", "ssh", "load_balancer_ssh"):
+            section_config = cluster.config.get(section) or {}
+            reference = section_config.get("credential_ref")
             if isinstance(reference, str) and reference.startswith("credential://"):
                 used.add(reference.removeprefix("credential://"))
     return used
+
+
+def validate_provisioning_ssh_credential(db: Session, config: ClusterConfig) -> None:
+    ssh = config.provisioning_ssh
+    ssh_credential = db.get(Credential, ssh.credential_ref.removeprefix("credential://"))
+    if not ssh_credential or ssh_credential.kind != CredentialKind.SSH:
+        raise ValueError("SSH-Credential nicht gefunden")
+    if ssh.public_key != ssh_credential.public_data.get("public_key"):
+        raise ValueError("SSH-Credential und Public Key passen nicht zusammen")
 
 
 @app.post("/credentials/proxmox")
@@ -220,12 +241,25 @@ def new_cluster(request: Request, _: User = Depends(current_user), db: Session =
 
 def render_wizard(request: Request, db: Session, error: str | None = None, values: dict | None = None, status_code: int = 200):
     credentials = db.scalars(select(Credential).order_by(Credential.name)).all()
-    used_ips, used_ids = used_allocations(db, request.path_params.get("cluster_id"))
+    cluster_id = request.path_params.get("cluster_id")
+    used_ips, used_ids = used_allocations(db, cluster_id)
+    existing_cluster = db.get(Cluster, cluster_id) if cluster_id else None
+    cluster_type_locked = bool(existing_cluster and cluster_type_is_locked(existing_cluster))
+    wizard_values = dict(values or {})
+    if existing_cluster and cluster_type_locked:
+        # Never feed rejected client values back into immutable hidden fields;
+        # otherwise a locked edit can trap the browser in a resubmit loop.
+        persisted_values = cluster_form_values(existing_cluster)
+        wizard_values["cluster_type"] = persisted_values["cluster_type"]
+        if persisted_values["cluster_type"] == ClusterType.TALOS.value:
+            wizard_values["talos_version"] = persisted_values["talos_version"]
     return templates.TemplateResponse(request, "wizard.html", {
-        "credentials": credentials, "error": error, "values": values or {},
+        "credentials": credentials, "error": error, "values": wizard_values,
         "used_ips": sorted(map(str, used_ips)), "used_vm_ids": sorted(used_ids),
         "action": request.url.path if request.url.path.endswith("/edit") else "/clusters",
         "default_configuration_exists": get_preferences(db) is not None,
+        "supported_talos_versions": SUPPORTED_TALOS_VERSIONS,
+        "cluster_type_locked": cluster_type_locked,
     }, status_code=status_code)
 
 
@@ -237,12 +271,7 @@ async def create_cluster(request: Request, _: User = Depends(current_user), db: 
         values = bind_proxmox_credential(db, values)
         config = build_cluster_from_form(values)
         validate_current_template_disk(db, config)
-        ssh_id = config.ssh.credential_ref.removeprefix("credential://")
-        ssh_credential = db.get(Credential, ssh_id)
-        if not ssh_credential or ssh_credential.kind != CredentialKind.SSH:
-            raise ValueError("SSH-Credential nicht gefunden")
-        if config.ssh.public_key != ssh_credential.public_data.get("public_key"):
-            raise ValueError("Public Key passt nicht zum ausgewählten SSH-Credential")
+        validate_provisioning_ssh_credential(db, config)
         cluster = save_cluster(db, config, settings.data_root, settings.source_root)
     except (ValidationError, ValueError, KeyError, ProxmoxError) as exc:
         return render_wizard(request, db, str(exc), values, 400)
@@ -251,10 +280,16 @@ async def create_cluster(request: Request, _: User = Depends(current_user), db: 
 
 def cluster_form_values(cluster: Cluster) -> dict[str, str]:
     config = cluster.config
+    cluster_type = config.get("cluster_type", ClusterType.KUBEADM.value)
+    ssh = config.get("ssh") or config.get("load_balancer_ssh") or {}
+    load_balancer_ssh = config.get("load_balancer_ssh") or config.get("ssh") or {}
+    talos = config.get("talos") or {}
     roles = {role: [node for node in config["nodes"] if node["role"] == role] for role in ("loadbalancer", "control_plane", "worker")}
     values = {
+        "cluster_type": cluster_type,
         "name": config["name"], "proxmox_credential": config["proxmox"]["credential_ref"], "proxmox_endpoint": config["proxmox"]["endpoint"],
         "proxmox_node": config["proxmox"]["node"], "datastore": config["proxmox"]["datastore"], "template_vm_id": str(config["proxmox"]["template_vm_id"]),
+        "load_balancer_template_vm_id": str(config["proxmox"].get("load_balancer_template_vm_id") or ""),
         "bridge": config["proxmox"]["bridge"], "vlan_id": str(config["proxmox"].get("vlan_id") or ""),
         "vm_name_include_cluster": "on" if config["proxmox"].get("vm_name_include_cluster", False) else "",
         "network_cidr": config["network"]["cidr"], "gateway": config["network"]["gateway"], "dns_servers": ", ".join(config["network"]["dns_servers"]), "api_vip": config["network"]["api_vip"],
@@ -262,7 +297,9 @@ def cluster_form_values(cluster: Cluster) -> dict[str, str]:
         "registry_enabled": "on" if config.get("registry_enabled", False) else "",
         "registry_endpoint": str(config.get("registry_endpoint") or ""),
         "registry_use_http": "on" if config.get("registry_use_http", False) else "",
-        "ssh_credential": config["ssh"]["credential_ref"], "ssh_user": config["ssh"]["user"], "ssh_public_key": config["ssh"]["public_key"],
+        "ssh_credential": str(ssh.get("credential_ref", "")), "ssh_user": str(ssh.get("user", "ubuntu")), "ssh_public_key": str(ssh.get("public_key", "")),
+        "lb_ssh_credential": str(load_balancer_ssh.get("credential_ref", "")), "lb_ssh_user": str(load_balancer_ssh.get("user", "ubuntu")), "lb_ssh_public_key": str(load_balancer_ssh.get("public_key", "")),
+        "talos_version": str(talos.get("version", SUPPORTED_TALOS_VERSIONS[0])), "talos_install_disk": str(talos.get("install_disk", "/dev/sda")), "talos_network_interface": str(talos.get("network_interface", "eth0")),
         "calico_version": config["addons"]["cni"]["version"], "ingress_enabled": "on" if config["addons"]["ingress"]["enabled"] else "", "traefik_replicas": str(config["addons"]["ingress"]["replicas"]),
         "http_node_port": str(config["addons"]["ingress"]["http_node_port"]), "https_node_port": str(config["addons"]["ingress"]["https_node_port"]),
     }
@@ -380,10 +417,22 @@ async def update_cluster(cluster_id: str, request: Request, _: User = Depends(cu
     try:
         values = bind_proxmox_credential(db, values)
         config = build_cluster_from_form(values, cluster_id)
+        stored_type = ClusterType(cluster.config.get("cluster_type", ClusterType.KUBEADM.value))
+        if cluster_type_is_locked(cluster) and config.cluster_type != stored_type:
+            raise ValueError(
+                "Der Cluster-Typ kann nach dem ersten Deployment nicht geändert werden; "
+                "dafür ist ein neuer Cluster erforderlich."
+            )
+        stored_talos = cluster.config.get("talos") or {}
+        if (
+            cluster_type_is_locked(cluster)
+            and stored_type == ClusterType.TALOS
+            and config.talos is not None
+            and stored_talos.get("version") != config.talos.version.value
+        ):
+            raise ValueError("Talos-Upgrades sind in dieser Version nicht Teil des Cluster-Editors")
         validate_current_template_disk(db, config)
-        ssh_credential = db.get(Credential, config.ssh.credential_ref.removeprefix("credential://"))
-        if not ssh_credential or ssh_credential.kind != CredentialKind.SSH or config.ssh.public_key != ssh_credential.public_data.get("public_key"):
-            raise ValueError("SSH-Credential und Public Key passen nicht zusammen")
+        validate_provisioning_ssh_credential(db, config)
         save_cluster(db, config, settings.data_root, settings.source_root)
     except (ValidationError, ValueError, KeyError, ProxmoxError) as exc:
         return render_wizard(request, db, str(exc), values, 400)

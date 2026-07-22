@@ -1,6 +1,6 @@
 # Proxmox Kubernetes Cluster Builder
 
-Web-based builder for HA Kubernetes clusters on Proxmox. The application generates Terraform and Ansible configurations from a wizard, creates the Proxmox VMs, and installs Kubernetes, Calico, and optionally Traefik.
+Web-based builder for HA Kubernetes clusters on Proxmox. The application supports the existing Ubuntu/Ansible/kubeadm path and an additive Talos Linux path for control-plane and worker nodes. It creates the Proxmox VMs and installs Kubernetes, Calico, and optionally Traefik.
 
 The application is provided as prebuilt container images via the GitHub Container Registry (GHCR). For normal operation, the images therefore do not need to be built locally. Installation-specific values such as passwords, secrets, ports, and runtime settings are configured through a dedicated `.env` file.
 
@@ -9,6 +9,7 @@ The application is provided as prebuilt container images via the GitHub Containe
 - Proxmox cluster creation with load balancers, control planes, and workers
 - Terraform Plan, Apply, Destroy Plan, and Destroy through the web interface
 - Provisioning via Terraform, Ansible, and kubeadm
+- Optional Talos Linux provisioning for control-plane and worker nodes
 - HAProxy and Keepalived for the Kubernetes API VIP
 - Calico as the CNI and optionally Traefik as the ingress controller
 - Optional private container registry configuration for every Kubernetes node
@@ -26,6 +27,7 @@ For operation:
 - Docker and Docker Compose
 - A reachable Proxmox host or Proxmox cluster
 - A cloud-init-capable QEMU VM template on the selected Proxmox node
+- For Talos clusters, a separate unconfigured Talos NoCloud template matching the supported Talos version
 - A Proxmox API token with permissions to create, read, and delete VMs
 - Free IP addresses and VM IDs for load balancers, control planes, and workers
 - Network access from the builder/worker to Proxmox
@@ -37,11 +39,13 @@ Additionally, for local development:
 - Git
 - A checkout of the complete repository
 
-## Preparing the Proxmox Template
+## Preparing the Proxmox Templates
 
-The repository includes a one-time host setup tool at `proxmox/create-template.sh`. It is executed directly as `root` on the exact Proxmox node that will later be selected in the wizard.
+The repository includes two one-time host setup tools. `proxmox/create-template.sh` creates the Ubuntu template used by kubeadm clusters and by Talos load balancers. `proxmox/create-talos-template.sh` creates the separate Talos NoCloud template used by Talos control-plane and worker nodes. Both scripts are executed directly as `root` on the exact Proxmox node that will later be selected in the wizard.
 
-The script does not run inside the builder container and is not started automatically by either the web application or Ansible.
+The scripts do not run inside the builder container and are not started automatically by either the web application or Ansible.
+
+### Ubuntu template
 
 It downloads an official Ubuntu cloud image over HTTPS, verifies its SHA-256 checksum, installs Cloud-Init, SSH, and the QEMU Guest Agent, and creates a QEMU template from it.
 
@@ -74,6 +78,29 @@ bash /root/create-template.sh --help
 ```
 
 After successful completion, the template can later be selected in the builder.
+
+### Talos NoCloud template
+
+For a Talos cluster, copy and run the separate helper. `9200` is another example ID and must differ from the Ubuntu template ID and all cluster VM IDs:
+
+```bash
+scp proxmox/create-talos-template.sh root@pve-node:/root/create-talos-template.sh
+ssh root@pve-node
+
+bash /root/create-talos-template.sh \
+  --vm-id 9200 \
+  --storage local-lvm \
+  --bridge vmbr0 \
+  --talos-version v1.13.6 \
+  --install-disk /dev/sda \
+  --install-dependencies
+```
+
+The helper downloads the exact supported vanilla Talos NoCloud image, verifies it against the repository-pinned SHA-256 value, and creates an OVMF/q35 template with a normal VirtIO-SCSI controller, EFI and NoCloud disks, fixed memory, and no QEMU Guest Agent. It never embeds a Machine Config, PKI, SSH key, hostname, or IP address.
+
+`/dev/sda` (`scsi0`) is the recommended default. The helper can instead create a `/dev/vda` (`virtio0`) template, but the **Talos installation disk** selected in the wizard must exactly match the value used while creating that template. Do not select `/dev/vda` for a template that was built with `/dev/sda`.
+
+Talos clusters therefore select two different template IDs in the wizard: the Talos template for control-plane/workers and the Ubuntu template for the load balancers.
 
 ## Setup with Prebuilt Container Images
 

@@ -7,6 +7,7 @@
 {% set control_planes = cluster.config.nodes | selectattr('role', 'equalto', 'control_plane') | list %}
 {% set workers = cluster.config.nodes | selectattr('role', 'equalto', 'worker') | list %}
 {% set loadbalancers = cluster.config.nodes | selectattr('role', 'equalto', 'loadbalancer') | list %}
+{% set cluster_type = cluster.config.get('cluster_type', 'kubeadm') %}
 <header class="page-header">
   <div class="page-heading">
     <p class="eyebrow">Clusterverwaltung</p>
@@ -18,6 +19,8 @@
       <span>{{ ui.icon('server') }}{{ cluster.config.proxmox.endpoint }}</span>
       <span class="subtitle-separator">·</span>
       <span>{{ ui.icon('network') }}{{ cluster.config.network.cidr }}</span>
+      <span class="subtitle-separator">·</span>
+      <span>{% if cluster_type == 'talos' %}Talos {{ (cluster.config.get('talos') or {}).get('version', '') }}{% else %}Kubernetes / kubeadm{% endif %}</span>
     </p>
   </div>
   <div class="page-actions">
@@ -135,7 +138,7 @@
           <button class="button full" {% if cluster.planned_hash != cluster.config_hash %}disabled title="Zuerst aktuellen Plan erstellen"{% endif %}>{{ ui.icon('check') }}<span>Geprüften Plan anwenden</span></button>
         </form>
         <form method="post" action="/clusters/{{ cluster.id }}/jobs/ansible">
-          <button class="button secondary full" {% if not terraform_state_available %}disabled title="Erst nach Terraform-Apply verfügbar"{% endif %}>{{ ui.icon('refresh') }}<span>Ansible erneut ausführen</span></button>
+          <button class="button secondary full" {% if not terraform_state_available %}disabled title="Erst nach Terraform-Apply verfügbar"{% endif %}>{{ ui.icon('refresh') }}<span>{% if cluster_type == 'talos' %}Talos-Provisionierung fortsetzen{% else %}Ansible erneut ausführen{% endif %}</span></button>
         </form>
         <form method="post" action="/clusters/{{ cluster.id }}/jobs/verify">
           <button class="button secondary full" {% if not kubeconfig_available %}disabled title="Erst nach erfolgreichem Apply verfügbar"{% endif %}>{{ ui.icon('shield-check') }}<span>Cluster prüfen</span></button>
